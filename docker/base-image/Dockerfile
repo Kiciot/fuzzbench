@@ -19,6 +19,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Python 3.10.8 is not the default version in Ubuntu 20.04 (Focal Fossa).
 ENV PYTHON_VERSION 3.10.8
 # Install dependencies required by Python3 or Pip3.
+ENV HTTP_PROXY=http://172.17.0.1:7890
+ENV HTTPS_PROXY=http://172.17.0.1:7890
+ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
 RUN apt-get update && \
     apt-get upgrade -y && \
     apt-get install -y \
@@ -46,6 +49,8 @@ RUN cd /tmp/ && \
     ln -s /usr/local/bin/pip3 /usr/local/bin/pip
 
 # Install common python dependencies.
+RUN mkdir -p /root/.config/pip && \
+    printf "[global]\nindex-url=https://pypi.tuna.tsinghua.edu.cn/simple\ntimeout=20\nretries=3\ndisable-pip-version-check=true\n" > /root/.config/pip/pip.conf
 COPY ./requirements.txt /tmp
 RUN pip install -r /tmp/requirements.txt
 
