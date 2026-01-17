@@ -15,7 +15,13 @@
 FROM ubuntu:focal
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV HTTP_PROXY=http://172.17.0.1:7890
+ENV HTTPS_PROXY=http://172.17.0.1:7890
+ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
 
+ENV http_proxy=$HTTP_PROXY
+ENV https_proxy=$HTTPS_PROXY
+ENV no_proxy=$NO_PROXY
 # Python 3.10.8 is not the default version in Ubuntu 20.04 (Focal Fossa).
 ENV PYTHON_VERSION 3.10.8
 # Install dependencies required by Python3 or Pip3.
