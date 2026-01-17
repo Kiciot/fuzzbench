@@ -47,3 +47,6 @@ COPY --from=base-clang /usr/local/bin/llvm-profdata /usr/local/bin/
 COPY --from=base-clang /usr/local/bin/llvm-symbolizer /usr/local/bin/
 
 COPY startup-dispatcher.sh $WORK/
+
+RUN mkdir -p /root/.config/pip && \
+    printf "[global]\nindex-url=https://pypi.tuna.tsinghua.edu.cn/simple\ntimeout=20\nretries=3\ndisable-pip-version-check=true\n" > /root/.config/pip/pip.conf
