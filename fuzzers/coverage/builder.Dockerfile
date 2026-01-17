@@ -19,6 +19,10 @@ ENV LF_PATH /tmp/libfuzzer.zip
 ENV HTTP_PROXY=http://172.17.0.1:7890
 ENV HTTPS_PROXY=http://172.17.0.1:7890
 ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
+
+ENV http_proxy=$HTTP_PROXY
+ENV https_proxy=$HTTPS_PROXY
+ENV no_proxy=$NO_PROXY
 # Use a libFuzzer version that supports clang source-based coverage.
 # This libfuzzer is 0b5e6b11c358e704384520dc036eddb5da1c68bf with
 # https://github.com/google/fuzzbench/blob/cf86138081ec705a47ce0a4bab07b5737292e7e0/fuzzers/coverage/patch.diff
