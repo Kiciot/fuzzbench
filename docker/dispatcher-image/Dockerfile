@@ -17,6 +17,14 @@ FROM gcr.io/oss-fuzz-base/base-clang@sha256:05774d8e388cb4975662c8eb25217e38a799
 FROM gcr.io/fuzzbench/base-image
 
 ENV WORK /work
+ENV HTTP_PROXY=http://172.17.0.1:7890
+ENV HTTPS_PROXY=http://172.17.0.1:7890
+ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
+
+ENV http_proxy=$HTTP_PROXY
+ENV https_proxy=$HTTPS_PROXY
+ENV no_proxy=$NO_PROXY
+
 WORKDIR $WORK
 
 # Install runtime dependencies for benchmarks, easy json parsing, and fuzzbench.
