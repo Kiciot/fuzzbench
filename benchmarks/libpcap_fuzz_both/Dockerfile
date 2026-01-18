@@ -18,20 +18,30 @@ FROM gcr.io/oss-fuzz-base/base-builder@sha256:87ca1e9e19235e731fac8de8d1892ebe8d
 ENV HTTP_PROXY=http://172.17.0.1:7890
 ENV HTTPS_PROXY=http://172.17.0.1:7890
 ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
-
 ENV http_proxy=$HTTP_PROXY
 ENV https_proxy=$HTTPS_PROXY
 ENV no_proxy=$NO_PROXY
-
-RUN apt-get update && \
-    apt-get install -y make cmake flex bison
 RUN git config --global http.proxy http://172.17.0.1:7890
-RUN git clone https://github.com/the-tcpdump-group/libpcap.git libpcap
+RUN git config --global http.sslVerify false
+# ======================
 
-# For corpus as wireshark.
+# 安装构建依赖 (libpcap 需要 flex 和 bison 进行语法解析)
+RUN apt-get update && \
+    apt-get install -y \
+    make \
+    cmake \
+    flex \
+    bison
+
+# === 2. 版本锁定: libpcap-1.10.0 ===
+# 锁定到 1.10.0 官方 tag
+RUN git clone \
+    --depth 1 \
+    --branch libpcap-1.10.0 \
+    https://github.com/the-tcpdump-group/libpcap.git libpcap
+
 RUN git clone https://github.com/the-tcpdump-group/tcpdump.git tcpdump && \
     git -C tcpdump checkout 032e4923e5202ea4d5a6d1cead83ed1927135874
 
 WORKDIR $SRC
 COPY build.sh $SRC/
-

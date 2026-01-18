@@ -1,4 +1,4 @@
-# Copyright 2016 Google Inc.
+# Copyright 2019 Google Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,22 +15,36 @@
 ################################################################################
 
 FROM gcr.io/oss-fuzz-base/base-builder@sha256:87ca1e9e19235e731fac8de8d1892ebe8d55caf18e7aa131346fc582a2034fdd
+
+# === 1. 网络代理配置 (核弹级) ===
 ENV HTTP_PROXY=http://172.17.0.1:7890
 ENV HTTPS_PROXY=http://172.17.0.1:7890
 ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
-
 ENV http_proxy=$HTTP_PROXY
 ENV https_proxy=$HTTPS_PROXY
 ENV no_proxy=$NO_PROXY
-RUN apt-get update && apt-get upgrade -y && apt-get install -y make autoconf automake libtool curl tcl zlib1g-dev
 
+RUN git config --global http.proxy http://172.17.0.1:7890
+RUN git config --global http.sslVerify false
+# ==============================
 
+# 安装构建依赖 (Binutils 需要 texinfo, flex, bison)
+RUN apt-get update && apt-get install -y \
+    make \
+    texinfo \
+    flex \
+    bison \
+    zip
+
+# === 2. 版本锁定: binutils-2_26 ===
+# 使用 GNU Binutils 的官方 git 镜像，锁定到 2.26 tag
+# 注意：Binutils 的 tag 格式通常是 "binutils-2_26" (下划线)
 RUN git clone \
     --depth 1 \
-    --branch version-3.15.0 \
-    https://github.com/sqlite/sqlite.git
+    --branch binutils-2_26 \
+   https://github.com/bminor/binutils-gdb binutils
 
-WORKDIR sqlite
-RUN mkdir -p bld
-RUN find test -name "*.test" | xargs zip $OUT/sqlite3_ossfuzz_seed_corpus.zip
-COPY build.sh *.dict* $SRC/
+WORKDIR binutils
+
+# 复制构建脚本
+COPY build.sh $SRC/

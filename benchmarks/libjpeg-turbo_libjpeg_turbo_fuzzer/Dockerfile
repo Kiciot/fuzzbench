@@ -18,26 +18,31 @@ FROM gcr.io/oss-fuzz-base/base-builder@sha256:87ca1e9e19235e731fac8de8d1892ebe8d
 ENV HTTP_PROXY=http://172.17.0.1:7890
 ENV HTTPS_PROXY=http://172.17.0.1:7890
 ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
-
-ENV http_proxy=$HTTP_PROXY
-ENV https_proxy=$HTTPS_PROXY
-ENV no_proxy=$NO_PROXY
-RUN apt-get update && \
-    apt-get install -y make yasm cmake
 RUN git config --global http.proxy http://172.17.0.1:7890
-RUN git clone https://github.com/libjpeg-turbo/fuzz && \
-    cat fuzz/branches.txt | while read branch; do \
-      git clone https://github.com/libjpeg-turbo/libjpeg-turbo \
-          -b $branch libjpeg-turbo.$branch; \
-    done
+RUN git config --global http.sslVerify false
+
+RUN apt-get update && \
+    apt-get install -y \
+    make \
+    yasm \
+    cmake \
+    zip
+
+RUN git clone \
+    --depth 1 \
+    --branch 2.0.6 \
+    https://github.com/libjpeg-turbo/libjpeg-turbo.git \
+    libjpeg-turbo
 
 RUN git clone https://github.com/libjpeg-turbo/seed-corpora && \
     git -C seed-corpora checkout 7c9ea5ffaac76ef618657978c9fdfa845d310b93
+
 RUN cd seed-corpora && \
     zip -r ../decompress_fuzzer_seed_corpus.zip \
         afl-testcases/jpeg* \
         bugs/decompress* \
         $SRC/libjpeg-turbo/testimages/*.jpg
+
 RUN cd seed-corpora && \
     zip -r ../compress_fuzzer_seed_corpus.zip \
         afl-testcases/bmp \
@@ -45,6 +50,9 @@ RUN cd seed-corpora && \
         bugs/compress* \
         $SRC/libjpeg-turbo/testimages/*.bmp \
         $SRC/libjpeg-turbo/testimages/*.ppm
+
 RUN rm -rf seed-corpora
+
+RUN mv libjpeg-turbo libjpeg-turbo.2.0.6
 
 COPY build.sh $SRC/

@@ -28,10 +28,19 @@ RUN apt-get update && \
     automake \
     libtool \
     wget
-RUN git config --global http.proxy http://172.17.0.1:7890
-RUN git clone https://github.com/mm2/Little-CMS.git
+RUN git clone https://github.com/mm2/Little-CMS.git lcms && \
+    cd lcms && \
+    git checkout f9d75c31e670d97960f89839352e008709337581
 
-RUN wget -qO $OUT/cms_transform_fuzzer.dict \
+WORKDIR lcms
+
+# === 3. 下载字典 ===
+# 加上代理参数，防止下载失败
+RUN wget --no-check-certificate \
+    -e use_proxy=yes -e http_proxy=http://172.17.0.1:7890 \
+    -qO $OUT/cms_transform_fuzzer.dict \
     https://raw.githubusercontent.com/google/fuzzing/master/dictionaries/icc.dict
+
+# 复制构建脚本、Fuzz Target 和 种子
 COPY cms_transform_fuzzer.cc build.sh $SRC/
 ADD seeds /opt/seeds

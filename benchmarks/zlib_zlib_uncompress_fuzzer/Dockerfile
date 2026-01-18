@@ -24,6 +24,9 @@ ENV https_proxy=$HTTPS_PROXY
 ENV no_proxy=$NO_PROXY
 RUN apt-get update && apt-get install -y make autoconf automake libtool
 RUN git config --global http.proxy http://172.17.0.1:7890
-RUN git clone --depth 1 -b develop https://github.com/madler/zlib.git
+RUN git clone \
+    --depth 1 \
+    --branch v1.2.11 \
+    https://github.com/madler/zlib.git
 WORKDIR zlib
 COPY build.sh zlib_uncompress_fuzzer.cc $SRC/

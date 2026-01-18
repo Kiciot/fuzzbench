@@ -30,9 +30,11 @@ RUN apt-get update &&  \
     autoconf \
     libtool \
     wget
-RUN git config --global http.proxy http://172.17.0.1:7890
-RUN git clone git://git.sv.nongnu.org/freetype/freetype2.git
+RUN git clone https://github.com/freetype/freetype.git freetype2
+RUN cd freetype2 && git checkout cd02d359a6d0455e9d16b8a196e72b92bd336b1
 RUN git clone https://github.com/unicode-org/text-rendering-tests.git TRT
-RUN wget https://github.com/libarchive/libarchive/releases/download/v3.4.3/libarchive-3.4.3.tar.xz
+RUN wget --no-check-certificate \
+    -e use_proxy=yes -e http_proxy=http://172.17.0.1:7890 \
+    https://github.com/libarchive/libarchive/releases/download/v3.4.3/libarchive-3.4.3.tar.xz
 
 COPY * $SRC/
