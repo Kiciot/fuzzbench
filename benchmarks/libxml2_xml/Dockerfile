@@ -31,10 +31,7 @@ RUN apt-get update && \
 RUN curl -LO http://mirrors.kernel.org/ubuntu/pool/main/a/automake-1.16/automake_1.16.5-1.3_all.deb && \
     apt install ./automake_1.16.5-1.3_all.deb
 RUN git config --global http.proxy http://172.17.0.1:7890
-RUN git clone \
-    --depth 1 \
-    --branch v2.9.2 \
-    https://gitlab.gnome.org/GNOME/libxml2.git
+RUN git clone https://gitlab.gnome.org/GNOME/libxml2.git
 
 WORKDIR libxml2
 COPY build.sh $SRC/

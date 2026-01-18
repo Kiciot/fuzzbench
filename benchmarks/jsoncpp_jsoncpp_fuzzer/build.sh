@@ -17,7 +17,9 @@
 
 mkdir -p build
 cd build
-cmake -DCMAKE_CXX_COMPILER=$CXX -DCMAKE_CXX_FLAGS="$CXXFLAGS" \
+
+# 修改点：在 CMAKE_CXX_FLAGS 中追加了 -Wno-error=implicit-int-float-conversion
+cmake -DCMAKE_CXX_COMPILER=$CXX -DCMAKE_CXX_FLAGS="$CXXFLAGS -Wno-error=implicit-int-float-conversion" \
       -DJSONCPP_WITH_POST_BUILD_UNITTEST=OFF -DJSONCPP_WITH_TESTS=OFF \
       -DBUILD_SHARED_LIBS=OFF -G "Unix Makefiles" ..
 make
@@ -28,4 +30,4 @@ $CXX $CXXFLAGS -I../include $LIB_FUZZING_ENGINE \
     lib/libjsoncpp.a
 
 # Add dictionary.
-cp $SRC/jsoncpp/src/test_lib_json/fuzz.dict $OUT/jsoncpp_fuzzer.dict
+cp $SRC/jsoncpp/src/test_lib_json/fuzz.dict $OUT/jsoncpp_fuzzer.dicts

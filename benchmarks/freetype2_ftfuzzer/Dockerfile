@@ -31,7 +31,7 @@ RUN apt-get update &&  \
     libtool \
     wget
 RUN git clone https://github.com/freetype/freetype.git freetype2
-RUN cd freetype2 && git checkout cd02d359a6d0455e9d16b8a196e72b92bd336b1
+RUN cd freetype2
 RUN git clone https://github.com/unicode-org/text-rendering-tests.git TRT
 RUN wget --no-check-certificate \
     -e use_proxy=yes -e http_proxy=http://172.17.0.1:7890 \
