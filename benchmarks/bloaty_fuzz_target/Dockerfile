@@ -29,7 +29,7 @@ RUN apt-get update && \
         ninja-build \
         g++ \
         libz-dev
-
+RUN git config --global http.proxy http://172.17.0.1:7890
 RUN git clone \
     https://github.com/google/bloaty.git
 

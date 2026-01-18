@@ -25,7 +25,7 @@ ENV no_proxy=$NO_PROXY
 RUN apt-get update && \
     apt-get install -y \
         wget tar
-
+RUN git config --global http.proxy http://172.17.0.1:7890
 # This project does not have any release/tag.
 RUN git clone \
         https://github.com/nothings/stb.git

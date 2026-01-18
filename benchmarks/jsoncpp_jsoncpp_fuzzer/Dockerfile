@@ -24,6 +24,7 @@ ENV https_proxy=$HTTPS_PROXY
 ENV no_proxy=$NO_PROXY
 RUN apt-get update && apt-get install -y build-essential make curl wget
 
+RUN git config --global http.proxy http://172.17.0.1:7890
 # Install latest cmake.
 RUN wget https://github.com/Kitware/CMake/releases/download/v3.14.5/cmake-3.14.5-Linux-x86_64.sh && \
     chmod +x cmake-3.14.5-Linux-x86_64.sh && \

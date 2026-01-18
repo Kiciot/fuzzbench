@@ -23,6 +23,7 @@ ENV http_proxy=$HTTP_PROXY
 ENV https_proxy=$HTTPS_PROXY
 ENV no_proxy=$NO_PROXY
 # Curl will be checked out to the commit hash specified in benchmark.yaml.
+RUN git config --global http.proxy http://172.17.0.1:7890
 RUN git clone https://github.com/curl/curl-fuzzer /src/curl_fuzzer
 RUN git -C /src/curl_fuzzer checkout dd486c1e5910e722e43c451d4de928ac80f5967d
 RUN git clone --depth 1 https://github.com/curl/curl.git /src/curl

@@ -62,7 +62,7 @@ RUN apt-get update && \
         make install \
     )
 
-
+RUN git config --global http.proxy http://172.17.0.1:7890
 RUN git clone https://gitlab.gnome.org/GNOME/libxml2.git && \
     git -C libxml2 checkout c7260a47f19e01f4f663b6a56fbdc2dafd8a6e7e && \
     git clone https://gitlab.gnome.org/GNOME/libxslt.git

@@ -28,7 +28,7 @@ RUN apt-get update && apt-get install -y \
     python3-all-dev \
     python3-pip  && \
     ln -s /usr/local/bin/pip3 /usr/local/bin/pip
-
+RUN git config --global http.proxy http://172.17.0.1:7890
 RUN git clone --recursive -b development https://github.com/Mbed-TLS/mbedtls.git mbedtls
 
 RUN git clone --depth 1 https://github.com/google/boringssl.git boringssl

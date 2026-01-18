@@ -28,7 +28,7 @@ RUN apt-get update && \
     automake \
     libtool \
     wget
-
+RUN git config --global http.proxy http://172.17.0.1:7890
 RUN git clone https://github.com/mm2/Little-CMS.git
 
 RUN wget -qO $OUT/cms_transform_fuzzer.dict \

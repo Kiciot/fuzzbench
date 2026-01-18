@@ -28,7 +28,7 @@ RUN apt-get update && \
     automake \
     make \
     wget
-
+RUN git config --global http.proxy http://172.17.0.1:7890
 RUN git clone https://github.com/google/re2.git
 
 RUN wget -qO $OUT/fuzzer.dict \

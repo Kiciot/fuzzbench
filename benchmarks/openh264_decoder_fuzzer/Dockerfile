@@ -28,7 +28,7 @@ RUN dpkg --add-architecture i386 && \
     apt-get update && \
     apt-get install -y \
         libstdc++-9-dev libstdc++-9-dev:i386 nasm subversion
-
+RUN git config --global http.proxy http://172.17.0.1:7890
 RUN git clone \
         https://github.com/cisco/openh264.git
 

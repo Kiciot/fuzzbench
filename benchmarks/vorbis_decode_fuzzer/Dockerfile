@@ -29,7 +29,7 @@ RUN apt-get update && \
     autoconf \
     libtool \
     wget
-
+RUN git config --global http.proxy http://172.17.0.1:7890
 RUN git clone https://github.com/xiph/ogg.git && \
     git -C ogg checkout db5c7a49ce7ebda47b15b78471e78fb7f2483e22
 RUN git clone https://github.com/xiph/vorbis.git

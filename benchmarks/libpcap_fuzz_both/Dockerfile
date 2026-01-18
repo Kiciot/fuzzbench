@@ -25,7 +25,7 @@ ENV no_proxy=$NO_PROXY
 
 RUN apt-get update && \
     apt-get install -y make cmake flex bison
-
+RUN git config --global http.proxy http://172.17.0.1:7890
 RUN git clone https://github.com/the-tcpdump-group/libpcap.git libpcap
 
 # For corpus as wireshark.

@@ -23,6 +23,7 @@ ENV http_proxy=$HTTP_PROXY
 ENV https_proxy=$HTTPS_PROXY
 ENV no_proxy=$NO_PROXY
 RUN apt-get update && apt-get install -y make
+RUN git config --global http.proxy http://172.17.0.1:7890
 RUN git clone \
         --depth 1 \
         --branch openssl-3.0.7 \

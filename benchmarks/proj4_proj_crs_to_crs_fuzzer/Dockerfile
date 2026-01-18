@@ -25,7 +25,7 @@ ENV no_proxy=$NO_PROXY
 RUN apt-get update && \
     apt-get install -y \
         make autoconf automake libtool g++ sqlite3 pkg-config wget liblzma-dev
-
+RUN git config --global http.proxy http://172.17.0.1:7890
 RUN git clone https://github.com/OSGeo/PROJ PROJ
 
 RUN git clone https://github.com/curl/curl.git PROJ/curl && \

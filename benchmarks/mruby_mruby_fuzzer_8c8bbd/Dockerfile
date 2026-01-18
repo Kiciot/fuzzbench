@@ -24,6 +24,8 @@ ENV https_proxy=$HTTPS_PROXY
 ENV no_proxy=$NO_PROXY
 RUN apt-get update && apt-get install -y build-essential ruby bison ninja-build \
     cmake zlib1g-dev libbz2-dev liblzma-dev
+    
+RUN git config --global http.proxy http://172.17.0.1:7890
 RUN git clone \
         https://github.com/mruby/mruby
 RUN git clone --depth 1 https://github.com/bshastry/mruby_seeds.git mruby_seeds
