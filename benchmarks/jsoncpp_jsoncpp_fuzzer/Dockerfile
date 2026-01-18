@@ -15,41 +15,23 @@
 ################################################################################
 
 FROM gcr.io/oss-fuzz-base/base-builder@sha256:87ca1e9e19235e731fac8de8d1892ebe8d55caf18e7aa131346fc582a2034fdd
-
 ENV HTTP_PROXY=http://172.17.0.1:7890
 ENV HTTPS_PROXY=http://172.17.0.1:7890
 ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
+
 ENV http_proxy=$HTTP_PROXY
 ENV https_proxy=$HTTPS_PROXY
 ENV no_proxy=$NO_PROXY
+RUN apt-get update && apt-get install -y build-essential make curl wget
 
-RUN git config --global http.proxy http://172.17.0.1:7890
-RUN git config --global http.sslVerify false
-
-RUN echo "http_proxy = http://172.17.0.1:7890" >> /etc/wgetrc && \
-    echo "https_proxy = http://172.17.0.1:7890" >> /etc/wgetrc && \
-    echo "use_proxy = on" >> /etc/wgetrc
-
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    make \
-    curl \
-    wget \
-    python
-
+# Install latest cmake.
 RUN wget https://github.com/Kitware/CMake/releases/download/v3.14.5/cmake-3.14.5-Linux-x86_64.sh && \
     chmod +x cmake-3.14.5-Linux-x86_64.sh && \
     ./cmake-3.14.5-Linux-x86_64.sh --skip-license --prefix="/usr/local"
 
-# 锁定到 1.8.4 tag
-RUN git clone \
-    --depth 1 \
-    --branch 1.8.4 \
-    https://github.com/open-source-parsers/jsoncpp.git
-
+RUN git config --global http.proxy http://172.17.0.1:7890
+RUN git clone https://github.com/open-source-parsers/jsoncpp
 WORKDIR jsoncpp
 
-RUN wget --no-check-certificate -qO $OUT/json.dict \
-    https://raw.githubusercontent.com/rc0r/afl-fuzz/master/dictionaries/json.dict
-
 COPY build.sh $SRC/
+
