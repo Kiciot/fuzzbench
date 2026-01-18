@@ -37,7 +37,7 @@ RUN git clone \
 # === 关键修改：给 libpng 加上 --depth 1 ===
 RUN git clone \
     --depth 1 \
-    --branch v1.6.29 \
+    --branch v1.6.33 \
     https://github.com/glennrp/libpng.git
 
 RUN ls -R libpng/contrib/oss-fuzz
