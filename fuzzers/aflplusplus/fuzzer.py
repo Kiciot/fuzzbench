@@ -225,7 +225,66 @@ def build(*args):  # pylint: disable=too-many-branches,too-many-statements
         print('Re-building benchmark for symcc fuzzing target')
         utils.build_benchmark(env=new_env)
 
-    shutil.copy('/afl/afl-fuzz', build_directory)
+# -------------------------------------------------------------------------
+    # 修复开始：针对 AFL++ 4.35+ 目录结构的兼容性补丁
+    # -------------------------------------------------------------------------
+    # 1. 把真正的 afl-fuzz 重命名为 afl-fuzz-real
+    shutil.copy('/afl/afl-fuzz', os.path.join(build_directory, 'afl-fuzz-real'))
+
+    # 2. 创建一个伪装的 afl-fuzz 脚本
+    wrapper_path = os.path.join(build_directory, 'afl-fuzz')
+    with open(wrapper_path, 'w') as f:
+        f.write(
+"""#!/bin/bash
+# 这是一个 Wrapper 脚本，用于解决 AFL++ 4.x 输出目录变更为 default/queue 的问题
+
+# 后台任务：等待目录生成并创建软链接
+(
+  # 等待 AFL++ 初始化目录
+  sleep 5
+  
+  # 尝试找到输出目录（从参数里分析，或者默认当前目录）
+  # FuzzBench 通常把输出目录作为最后一个参数，或者在当前工作目录
+  
+  # 核心逻辑：如果在当前目录下发现了 default 或 main 文件夹，这就建立了软链接
+  TARGET_SUBDIR=""
+  if [ -d "default" ]; then
+      TARGET_SUBDIR="default"
+  elif [ -d "main" ]; then
+      TARGET_SUBDIR="main"
+  fi
+
+  if [ -n "$TARGET_SUBDIR" ]; then
+     # 链接 queue (最重要的数据)
+     if [ -d "$TARGET_SUBDIR/queue" ] && [ ! -d "queue" ]; then
+       ln -s "$TARGET_SUBDIR/queue" "queue"
+     fi
+     # 链接 fuzzer_stats (统计数据)
+     if [ -f "$TARGET_SUBDIR/fuzzer_stats" ] && [ ! -f "fuzzer_stats" ]; then
+       ln -s "$TARGET_SUBDIR/fuzzer_stats" "fuzzer_stats"
+     fi
+     # 链接 crashes
+     if [ -d "$TARGET_SUBDIR/crashes" ] && [ ! -d "crashes" ]; then
+       ln -s "$TARGET_SUBDIR/crashes" "crashes"
+     fi
+     # 链接 hangs
+     if [ -d "$TARGET_SUBDIR/hangs" ] && [ ! -d "hangs" ]; then
+       ln -s "$TARGET_SUBDIR/hangs" "hangs"
+     fi
+  fi
+) &
+
+# 启动真正的 Fuzzer
+REAL_FUZZER=$(dirname "$0")/afl-fuzz-real
+exec "$REAL_FUZZER" "$@"
+""")
+    
+    # 赋予执行权限
+    os.chmod(wrapper_path, 0o755)
+    # -------------------------------------------------------------------------
+    # 修复结束
+    # -------------------------------------------------------------------------
+
     if os.path.exists('/afl/afl-qemu-trace'):
         shutil.copy('/afl/afl-qemu-trace', build_directory)
     if os.path.exists('/aflpp_qemu_driver_hook.so'):
