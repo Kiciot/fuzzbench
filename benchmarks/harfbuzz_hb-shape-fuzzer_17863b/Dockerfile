@@ -26,10 +26,7 @@ ENV no_proxy=$NO_PROXY
 RUN apt-get update && \
     apt-get install -y ragel pkg-config
 RUN git config --global http.proxy http://172.17.0.1:7890
-RUN git clone \
-    --depth 1 \
-    --branch 1.3.2 \
-    https://github.com/harfbuzz/harfbuzz.git
+RUN git clone https://github.com/harfbuzz/harfbuzz.git
 
 WORKDIR harfbuzz
 COPY build.sh $SRC/
