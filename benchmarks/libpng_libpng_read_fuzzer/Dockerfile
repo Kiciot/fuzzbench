@@ -36,9 +36,11 @@ RUN git clone \
 
 # === 关键修改：给 libpng 加上 --depth 1 ===
 RUN git clone \
-        --depth 1 \
-        https://github.com/glennrp/libpng.git
+    --depth 1 \
+    --branch v1.6.51 \
+    https://github.com/glennrp/libpng.git
 
+RUN ls -R libpng/contrib/oss-fuzz
 # 调试命令：如果 CP 失败，这行命令会在构建日志里告诉我们 libpng 里面到底有啥
 RUN ls -R libpng/contrib || echo "Directory missing!"
 
