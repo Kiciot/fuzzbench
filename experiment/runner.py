@@ -14,6 +14,7 @@
 # limitations under the License.
 """Runs fuzzer for trial."""
 
+import glob
 import importlib
 import json
 import os
@@ -55,12 +56,67 @@ RESULTS_DIRNAME = 'results'
 CORPUS_ARCHIVE_DIRNAME = 'corpus-archives'
 
 
+def _looks_like_afl_dir(d):
+    """Checks if directory d looks like a valid AFL++ output dir.
+    
+    Returns True if:
+    1. It has a 'queue' subdir AND
+    2. It has strong AFL markers (fuzzer_stats, etc) OR 'queue' has regular files.
+    """
+    if not os.path.isdir(d):
+        return False
+    
+    queue_dir = os.path.join(d, 'queue')
+    if not os.path.isdir(queue_dir):
+        return False
+
+    # Strong indicators that this is the active output directory
+    markers = ('fuzzer_stats', 'plot_data', 'cmdline', 'target_hash')
+    if any(os.path.exists(os.path.join(d, m)) for m in markers):
+        return True
+
+    # Fallback: Check if queue has at least one VALID file (not dotfile, not subdir)
+    try:
+        with os.scandir(queue_dir) as it:
+            for entry in it:
+                if entry.is_file(follow_symlinks=False) and not entry.name.startswith('.'):
+                    return True
+    except OSError:
+        pass
+        
+    return False
+
+
+def _find_real_output_corpus_dir(output_corpus_dir):
+    """Return the directory where AFL/AFL++ actually writes queue/ etc."""
+    if not output_corpus_dir:
+        return output_corpus_dir
+    
+    # Normalize path to avoid relative path/symlink confusion
+    output_corpus_dir = os.path.abspath(output_corpus_dir)
+
+    # 1. Check AFL++ common layouts (default/main/master) with strong validation
+    for name in ('default', 'main', 'master'):
+        cand = os.path.join(output_corpus_dir, name)
+        if _looks_like_afl_dir(cand):
+            return cand
+
+    # 2. Check Legacy AFL layout: queue directly under output_corpus_dir
+    if _looks_like_afl_dir(output_corpus_dir):
+        return output_corpus_dir
+
+    # 3. Fallback: search any child dir that looks like an AFL dir
+    for cand in sorted(glob.glob(os.path.join(output_corpus_dir, '*'))):
+        cand = os.path.abspath(cand)
+        if _looks_like_afl_dir(cand):
+            return cand
+
+    # 4. Nothing found: keep original path
+    return output_corpus_dir
+
+
 def _clean_seed_corpus(seed_corpus_dir):
-    """Prepares |seed_corpus_dir| for the trial. This ensures that it can be
-    used by AFL which is picky about the seed corpus. Moves seed corpus files
-    from sub-directories into the corpus directory root. Also, deletes any files
-    that exceed the 1 MB limit. If the NO_SEEDS env var is specified than the
-    seed corpus files are deleted."""
+    """Prepares |seed_corpus_dir| for the trial."""
     if not os.path.exists(seed_corpus_dir):
         return
 
@@ -93,8 +149,7 @@ def _clean_seed_corpus(seed_corpus_dir):
 
 
 def get_clusterfuzz_seed_corpus_path(fuzz_target_path):
-    """Returns the path of the clusterfuzz seed corpus archive if one exists.
-    Otherwise returns None."""
+    """Returns the path of the clusterfuzz seed corpus archive if one exists."""
     if not fuzz_target_path:
         return None
     fuzz_target_without_extension = os.path.splitext(fuzz_target_path)[0]
@@ -128,9 +183,7 @@ def _copy_custom_seed_corpus(corpus_directory):
 
 def _unpack_clusterfuzz_seed_corpus(fuzz_target_path, corpus_directory):
     """If a clusterfuzz seed corpus archive is available, unpack it into the
-    corpus directory if it exists. Copied from unpack_seed_corpus in
-    engine_common.py in ClusterFuzz.
-    """
+    corpus directory."""
     oss_fuzz_corpus = environment.get('OSS_FUZZ_CORPUS')
     if oss_fuzz_corpus:
         benchmark = environment.get('BENCHMARK')
@@ -150,30 +203,33 @@ def _unpack_clusterfuzz_seed_corpus(fuzz_target_path, corpus_directory):
         return
 
     with zipfile.ZipFile(seed_corpus_archive_path) as zip_file:
-        # Unpack seed corpus recursively into the root of the main corpus
-        # directory.
         idx = 0
-        for seed_corpus_file in zip_file.infolist():
-            if seed_corpus_file.filename.endswith('/'):
-                # Ignore directories.
+        for zinfo in zip_file.infolist():
+            if zinfo.is_dir():
                 continue
-
+            
             # Allow callers to opt-out of unpacking large files.
-            if seed_corpus_file.file_size > CORPUS_ELEMENT_BYTES_LIMIT:
+            if zinfo.file_size > CORPUS_ELEMENT_BYTES_LIMIT:
                 continue
 
             output_filename = f'{idx:016d}'
             output_file_path = os.path.join(corpus_directory, output_filename)
-            zip_file.extract(seed_corpus_file, output_file_path)
-            idx += 1
+            
+            try:
+                # Use open() + copyfileobj to ensure flat file creation
+                with zip_file.open(zinfo) as src, open(output_file_path, 'wb') as dst:
+                    shutil.copyfileobj(src, dst)
+                idx += 1
+            except Exception as e:
+                # FIX A: Use standard logging formatting instead of f-string
+                logs.warning('Failed to unpack seed %s: %s', zinfo.filename, e)
 
     logs.info('Unarchived %d files from seed corpus %s.', idx,
               seed_corpus_archive_path)
 
 
 def run_fuzzer(max_total_time, log_filename):
-    """Runs the fuzzer using its script. Logs stdout and stderr of the fuzzer
-    script to |log_filename| if provided."""
+    """Runs the fuzzer using its script."""
     input_corpus = environment.get('SEED_CORPUS_DIR')
     output_corpus = os.environ['OUTPUT_CORPUS_DIR']
     fuzz_target_name = environment.get('FUZZ_TARGET')
@@ -197,8 +253,6 @@ def run_fuzzer(max_total_time, log_filename):
         sanitizer.set_sanitizer_options(env, is_fuzz_run=True)
 
     try:
-        # Because the runner is launched at a higher priority,
-        # set it back to the default(0) for fuzzing processes.
         command = [
             'nice', '-n',
             str(0 - runner_niceness), 'python3', '-u', '-c',
@@ -208,8 +262,6 @@ def run_fuzzer(max_total_time, log_filename):
              f'"{shlex.quote(target_binary)}")')
         ]
 
-        # Write output to stdout if user is fuzzing from command line.
-        # Otherwise, write output to the log file.
         if environment.get('FUZZ_OUTSIDE_EXPERIMENT'):
             new_process.execute(command,
                                 timeout=max_total_time,
@@ -263,9 +315,7 @@ class TrialRunner:  # pylint: disable=too-many-instance-attributes
             filesystem.recreate_directory(directory)
 
     def set_up_corpus_directories(self):
-        """Set up corpora for fuzzing. Set up the input corpus for use by the
-        fuzzer and set up the output corpus for the first sync so the initial
-        seeds can be measured."""
+        """Set up corpora for fuzzing."""
         fuzz_target_name = environment.get('FUZZ_TARGET')
         target_binary = fuzzer_utils.get_fuzz_target_binary(
             FUZZ_TARGET_DIR, fuzz_target_name)
@@ -279,9 +329,15 @@ class TrialRunner:  # pylint: disable=too-many-instance-attributes
             _copy_custom_seed_corpus(input_corpus)
 
         _clean_seed_corpus(input_corpus)
-        # Ensure seeds are in output corpus.
-        os.rmdir(self.output_corpus)
-        shutil.copytree(input_corpus, self.output_corpus)
+        
+        # Robust initialization using recreate_directory + copytree(dirs_exist_ok)
+        filesystem.recreate_directory(self.output_corpus)
+        try:
+            shutil.copytree(input_corpus, self.output_corpus, dirs_exist_ok=True)
+        except TypeError:
+            # Fallback for older python where dirs_exist_ok is not supported
+            shutil.rmtree(self.output_corpus)
+            shutil.copytree(input_corpus, self.output_corpus)
 
     def conduct_trial(self):
         """Conduct the benchmarking trial."""
@@ -300,9 +356,6 @@ class TrialRunner:  # pylint: disable=too-many-instance-attributes
         fuzz_thread = threading.Thread(target=run_fuzzer, args=args)
         fuzz_thread.start()
         if environment.get('FUZZ_OUTSIDE_EXPERIMENT'):
-            # Hack so that the fuzz_thread has some time to fail if something is
-            # wrong. Without this we will sleep for a long time before checking
-            # if the fuzz thread is alive.
             time.sleep(5)
 
         while fuzz_thread.is_alive():
@@ -321,9 +374,6 @@ class TrialRunner:  # pylint: disable=too-many-instance-attributes
                               experiment_utils.get_snapshot_seconds())
             sleep_time = next_sync_time - time.time()
             if sleep_time < 0:
-                # Log error if a sync has taken longer than
-                # get_snapshot_seconds() and messed up our time
-                # synchronization.
                 logs.warning('Sleep time on cycle %d is %d', self.cycle,
                              sleep_time)
                 sleep_time = 0
@@ -331,8 +381,6 @@ class TrialRunner:  # pylint: disable=too-many-instance-attributes
             sleep_time = experiment_utils.get_snapshot_seconds()
         logs.debug('Sleeping for %d seconds.', sleep_time)
         time.sleep(sleep_time)
-        # last_sync_time is recorded before the sync so that each sync happens
-        # roughly get_snapshot_seconds() after each other.
         self.last_sync_time = time.time()
 
     def do_sync(self):
@@ -346,23 +394,17 @@ class TrialRunner:  # pylint: disable=too-many-instance-attributes
             logs.error('Failed to sync cycle: %d.', self.cycle)
 
     def record_stats(self):
-        """Use fuzzer.get_stats if it is offered, validate the stats and then
-        save them to a file so that they will be synced to the filestore."""
-        # TODO(metzman): Make this more resilient so we don't wait forever and
-        # so that breakages in stats parsing doesn't break runner.
-
+        """Use fuzzer.get_stats if it is offered."""
         fuzzer_module = get_fuzzer_module(self.fuzzer)
-
         fuzzer_module_get_stats = getattr(fuzzer_module, 'get_stats', None)
         if fuzzer_module_get_stats is None:
-            # Stats support is optional.
             return
 
         try:
             output_corpus = environment.get('OUTPUT_CORPUS_DIR')
-            stats_json_str = fuzzer_module_get_stats(output_corpus,
+            real_output_corpus = _find_real_output_corpus_dir(output_corpus)
+            stats_json_str = fuzzer_module_get_stats(real_output_corpus,
                                                      self.log_file)
-
         except Exception:  # pylint: disable=broad-except
             logs.error('Call to %s failed.', fuzzer_module_get_stats)
             return
@@ -384,25 +426,37 @@ class TrialRunner:  # pylint: disable=too-many-instance-attributes
             self.corpus_archives_dir,
             experiment_utils.get_corpus_archive_name(self.cycle))
 
+        # Find the real corpus root with abspath and strict validation
+        real_corpus_root = _find_real_output_corpus_dir(self.output_corpus)
+        
+        # Log warning if no queue found - debugging aid
+        queue_dir = os.path.join(real_corpus_root, 'queue')
+        if not os.path.isdir(queue_dir):
+            logs.warning('No queue/ found in real_corpus_root=%s (cycle=%d). Archiving may be seed-only.',
+                         real_corpus_root, self.cycle)
+
         with tarfile.open(archive, 'w:gz') as tar:
             new_archive_time = self.last_archive_time
-            for file_path in get_corpus_elements(self.output_corpus):
+            
+            # FIX B: Use generator iteration (iter_targeted_corpus_elements)
+            # to avoid building a huge list in memory.
+            for file_path in iter_targeted_corpus_elements(real_corpus_root):
                 try:
                     stat_info = os.stat(file_path)
                     last_modified_time = stat_info.st_mtime
                     if last_modified_time <= self.last_archive_time:
                         continue  # We've saved this file already.
                     new_archive_time = max(new_archive_time, last_modified_time)
-                    arcname = os.path.relpath(file_path, self.output_corpus)
+                    
+                    # Calculate arcname relative to the real root
+                    arcname = os.path.relpath(file_path, real_corpus_root)
                     tar.add(file_path, arcname=arcname)
+                    
                 except (FileNotFoundError, OSError):
-                    # We will get these errors if files or directories are being
-                    # deleted from |directory| as we archive it. Don't bother
-                    # rescanning the directory, new files will be archived in
-                    # the next sync.
                     pass
                 except Exception:  # pylint: disable=broad-except
                     logs.error('Unexpected exception occurred when archiving.')
+        
         self.last_archive_time = new_archive_time
         return archive
 
@@ -414,10 +468,7 @@ class TrialRunner:  # pylint: disable=too-many-instance-attributes
         basename = os.path.basename(archive)
         gcs_path = posixpath.join(self.gcs_sync_dir, CORPUS_DIRNAME, basename)
 
-        # Don't use parallel to avoid stability issues.
         filestore_utils.cp(archive, gcs_path)
-
-        # Delete corpus archive so disk doesn't fill up.
         os.remove(archive)
 
     @retry.wrap(NUM_RETRIES, RETRY_DELAY,
@@ -433,26 +484,41 @@ class TrialRunner:  # pylint: disable=too-many-instance-attributes
         """Save the results directory to GCS."""
         if not self.gcs_sync_dir:
             return
-        # Copy results directory before rsyncing it so that we don't get an
-        # exception from uploading a file that changes in size. Files can change
-        # in size because the log file containing the fuzzer's output is in this
-        # directory and can be written to by the fuzzer at any time.
         results_copy = filesystem.make_dir_copy(self.results_dir)
         filestore_utils.rsync(
             results_copy, posixpath.join(self.gcs_sync_dir, RESULTS_DIRNAME))
 
 
 def get_fuzzer_module(fuzzer):
-    """Returns the fuzzer.py module for |fuzzer|. We made this function so that
-    we can mock the module because importing modules makes hard to undo changes
-    to the python process."""
+    """Returns the fuzzer.py module for |fuzzer|."""
     fuzzer_module_name = f'fuzzers.{fuzzer}.fuzzer'
     fuzzer_module = importlib.import_module(fuzzer_module_name)
     return fuzzer_module
 
 
+def iter_targeted_corpus_elements(corpus_dir):
+    """Yields absolute paths to corpus elements in |corpus_dir|,
+    filtering for specific subdirectories (queue, crashes, hangs).
+    This avoids archiving unrelated stats/plot files.
+    """
+    corpus_dir = os.path.abspath(corpus_dir)
+    # Only scan these directories
+    target_subdirs = ['queue', 'crashes', 'hangs']
+    
+    for subdir in target_subdirs:
+        target_path = os.path.join(corpus_dir, subdir)
+        if not os.path.isdir(target_path):
+            continue
+            
+        for root, _, files in os.walk(target_path):
+            for filename in files:
+                yield os.path.join(root, filename)
+
+
 def get_corpus_elements(corpus_dir):
-    """Returns a list of absolute paths to corpus elements in |corpus_dir|."""
+    """Returns a list of absolute paths to corpus elements in |corpus_dir|.
+    Kept for compatibility if other modules import it, though unused here.
+    """
     corpus_dir = os.path.abspath(corpus_dir)
     corpus_elements = []
     for root, _, files in os.walk(corpus_dir):

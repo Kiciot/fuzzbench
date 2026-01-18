@@ -16,86 +16,10 @@
 
 import os
 import shutil
-import glob
-import time
-import threading
 
 from fuzzers.afl import fuzzer as afl_fuzzer
 from fuzzers import utils
 
-def _has_queue_and_stats(d: str) -> bool:
-    return os.path.isdir(os.path.join(d, "queue")) and os.path.exists(os.path.join(d, "fuzzer_stats"))
-
-def _find_afl_real_output_dir(output_corpus: str) -> str:
-    if _has_queue_and_stats(output_corpus) or os.path.isdir(os.path.join(output_corpus, "queue")):
-        return output_corpus
-
-    preferred = ["default", "main", "master"]
-    for name in preferred:
-        cand = os.path.join(output_corpus, name)
-        if _has_queue_and_stats(cand):
-            return cand
-    for name in preferred:
-        cand = os.path.join(output_corpus, name)
-        if os.path.isdir(os.path.join(cand, "queue")):
-            return cand
-
-    subs = [d for d in sorted(glob.glob(os.path.join(output_corpus, "*"))) if os.path.isdir(d)]
-    for cand in subs:
-        if _has_queue_and_stats(cand):
-            return cand
-    for cand in subs:
-        if os.path.isdir(os.path.join(cand, "queue")):
-            return cand
-
-    return output_corpus
-
-def _ensure_legacy_links(output_corpus: str, timeout_sec: int = 120) -> None:
-    """Best-effort: ensure output_corpus/{queue,crashes,hangs,fuzzer_stats} exist."""
-    deadline = time.time() + timeout_sec
-
-    # Old layout already.
-    if os.path.isdir(os.path.join(output_corpus, "queue")) and \
-       os.path.exists(os.path.join(output_corpus, "fuzzer_stats")):
-        return
-
-    links = ["queue", "crashes", "hangs", "fuzzer_stats"]
-
-    while time.time() < deadline:
-        # If old layout becomes available, we're done.
-        if os.path.isdir(os.path.join(output_corpus, "queue")) and \
-           os.path.exists(os.path.join(output_corpus, "fuzzer_stats")):
-            return
-
-        real_dir = None
-        cand = _find_afl_real_output_dir(output_corpus)
-        if cand != output_corpus and os.path.isdir(os.path.join(cand, "queue")):
-            real_dir = cand
-
-        if real_dir:
-            made_progress = False
-            for name in links:
-                link_path = os.path.join(output_corpus, name)
-                target_path = os.path.join(real_dir, name)
-
-                if os.path.lexists(link_path):
-                    continue
-                if not os.path.exists(target_path):
-                    continue
-
-                rel_target = os.path.relpath(target_path, start=output_corpus)
-                try:
-                    os.symlink(rel_target, link_path)
-                    made_progress = True
-                except (FileExistsError, OSError):
-                    pass
-
-            # If we created something, check quickly again next loop.
-            if made_progress:
-                time.sleep(0.2)
-                continue
-
-        time.sleep(0.5)
 
 def get_cmplog_build_directory(target_directory):
     """Return path to CmpLog target directory."""
@@ -351,16 +275,6 @@ def fuzz(input_corpus,
         os.environ['AFL_CMPLOG_ONLY_NEW'] = '1'
         if 'ADDITIONAL_ARGS' in os.environ:
             flags += os.environ['ADDITIONAL_ARGS'].split(' ')
-
-    # --- AFL++ 4.x output layout compatibility: create legacy links under output_corpus ---
-    # Must run asynchronously because run_afl_fuzz() blocks.
-    t = threading.Thread(
-        target=_ensure_legacy_links,
-        args=(output_corpus, 120),  # timeout seconds; can tune
-        daemon=True,
-    )
-    t.start()
-    # --- end compatibility ---
 
     afl_fuzzer.run_afl_fuzz(input_corpus,
                             output_corpus,
