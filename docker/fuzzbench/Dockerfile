@@ -16,6 +16,13 @@ FROM python:3.10.8
 
 # Install the docker CLI.
 ENV DOCKER_VERSION=20.10.19
+ENV HTTP_PROXY=http://172.17.0.1:7890
+ENV HTTPS_PROXY=http://172.17.0.1:7890
+ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
+
+ENV http_proxy=$HTTP_PROXY
+ENV https_proxy=$HTTPS_PROXY
+ENV no_proxy=$NO_PROXY
 RUN wget https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_VERSION}.tgz \
  && tar xzvf docker-${DOCKER_VERSION}.tgz --strip 1 -C /usr/local/bin docker/docker \
  && rm -rf docker-${DOCKER_VERSION}.tgz
