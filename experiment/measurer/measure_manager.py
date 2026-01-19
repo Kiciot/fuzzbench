@@ -589,18 +589,38 @@ def measure_snapshot_coverage(  # pylint: disable=too-many-locals
     measuring_start_time = time.time()
     snapshot_logger.info('Measuring cycle: %d.', cycle)
     this_time = experiment_utils.get_cycle_time(cycle)
-    corpus_archive_dst = os.path.join(
-        snapshot_measurer.trial_dir, 'corpus',
-        experiment_utils.get_corpus_archive_name(cycle))
-    corpus_archive_src = exp_path.filestore(corpus_archive_dst)
 
-    corpus_archive_dir = os.path.dirname(corpus_archive_dst)
-    if not os.path.exists(corpus_archive_dir):
-        os.makedirs(corpus_archive_dir)
+    # Attempt to locate and copy the corpus archive using candidate names/dirs.
+    corpus_archive_dst = None
+    dir_candidates = ['corpus-archives', 'corpus']
+    name_candidates = [
+        f'corpus-archive-{cycle:04d}.tar.gz',
+        f'corpus-archive-{cycle:06d}.tar.gz',
+        f'corpus-archive-{cycle}.tar.gz',
+    ]
 
-    if filestore_utils.cp(corpus_archive_src,
-                          corpus_archive_dst,
-                          expect_zero=False).retcode:
+    found = False
+    for d in dir_candidates:
+        for n in name_candidates:
+            # Construct candidate local path
+            candidate_dst = os.path.join(snapshot_measurer.trial_dir, d, n)
+            # Map to filestore
+            candidate_src = exp_path.filestore(candidate_dst)
+
+            candidate_dir = os.path.dirname(candidate_dst)
+            if not os.path.exists(candidate_dir):
+                os.makedirs(candidate_dir)
+
+            if filestore_utils.cp(candidate_src,
+                                  candidate_dst,
+                                  expect_zero=False).retcode == 0:
+                corpus_archive_dst = candidate_dst
+                found = True
+                break
+        if found:
+            break
+
+    if not found:
         snapshot_logger.warning('Corpus not found for cycle: %d.', cycle)
         return None
 
