@@ -156,13 +156,14 @@ class Plotter:
         fuzzer_order = data_utils.benchmark_rank_by_mean(
             benchmark_snapshot_df, key=column_of_interest).index
 
+        errorbar = None if bugs or self._quick else ('ci', 95)
         axes = sns.lineplot(
             y=column_of_interest,
             x='time',
             hue='fuzzer',
             hue_order=fuzzer_order,
             data=benchmark_df[benchmark_df.time <= snapshot_time],
-            ci=None if bugs or self._quick else 95,
+            errorbar=errorbar,
             estimator=np.median,
             palette=self._fuzzer_colors,
             style='fuzzer',
@@ -381,31 +382,52 @@ class Plotter:
         self._write_plot_to_image(self.better_than_plot, better_than_table,
                                   image_path)
 
-    @staticmethod
-    def _generic_heatmap_plot(values, axes, args, shrink_cbar=0.2):
-        """Custom heatmap plot which mimics SciPy's sign_plot."""
-        args.update({'linewidths': 0.5, 'linecolor': '0.5', 'square': True})
-        # Annotate with values if less than 12 fuzzers.
-        if values.shape[0] > 11 and args.get('annot'):
-            args['annot'] = False
+@staticmethod
+def _generic_heatmap_plot(values, axes, args, shrink_cbar=0.2):
+    """Custom heatmap plot which mimics SciPy's sign_plot."""
 
-        axis = sns.heatmap(values, ax=axes, **args)
-        axis.set_ylabel('')
-        axis.set_xlabel('')
-        label_args = {'rotation': 0, 'horizontalalignment': 'right'}
-        axis.set_yticklabels(axis.get_yticklabels(), **label_args)
-        label_args = {'rotation': 270, 'horizontalalignment': 'right'}
-        axis.set_xticklabels(axis.get_xticklabels(), **label_args)
+    # --- guard: empty or all-NaN matrix ---
+    arr = np.asarray(values)
+    # DataFrame -> ndarray. If object dtype, try float conversion for NaN check.
+    try:
+        arr_float = arr.astype(float)
+        all_nan = (arr_float.size == 0) or np.all(np.isnan(arr_float))
+    except Exception:
+        # If conversion fails, fallback: treat empty as insufficient
+        all_nan = (arr.size == 0)
 
-        cbar_ax = axis.collections[0].colorbar
-        cbar_ax.outline.set_linewidth(1)
-        cbar_ax.outline.set_edgecolor('0.5')
+    if all_nan:
+        axes.text(0.5, 0.5, 'Insufficient data (all NaN)',
+                  ha='center', va='center', transform=axes.transAxes)
+        axes.set_xticks([])
+        axes.set_yticks([])
+        axes.set_xlabel('')
+        axes.set_ylabel('')
+        return None
+    # --- end guard ---
 
-        pos_bbox = cbar_ax.ax.get_position()
-        pos_bbox.y0 += shrink_cbar
-        pos_bbox.y1 -= shrink_cbar
-        cbar_ax.ax.set_position(pos_bbox)
-        return axis
+    args.update({'linewidths': 0.5, 'linecolor': '0.5', 'square': True})
+    # Annotate with values if less than 12 fuzzers.
+    if values.shape[0] > 11 and args.get('annot'):
+        args['annot'] = False
+
+    axis = sns.heatmap(values, ax=axes, **args)
+    axis.set_ylabel('')
+    axis.set_xlabel('')
+    label_args = {'rotation': 0, 'horizontalalignment': 'right'}
+    axis.set_yticklabels(axis.get_yticklabels(), **label_args)
+    label_args = {'rotation': 270, 'horizontalalignment': 'right'}
+    axis.set_xticklabels(axis.get_xticklabels(), **label_args)
+
+    cbar_ax = axis.collections[0].colorbar
+    cbar_ax.outline.set_linewidth(1)
+    cbar_ax.outline.set_edgecolor('0.5')
+
+    pos_bbox = cbar_ax.ax.get_position()
+    pos_bbox.y0 += shrink_cbar
+    pos_bbox.y1 -= shrink_cbar
+    cbar_ax.ax.set_position(pos_bbox)
+    return axis
 
     def _pvalue_heatmap_plot(self, p_values, axes=None, symmetric=False):
         """Draws heatmap plot for visualizing statistical test results.
@@ -432,6 +454,9 @@ class Plotter:
         }
 
         axis = self._generic_heatmap_plot(p_values, axes, heatmap_args)
+        if axis is None:
+            axes.set_title('Statistical test result (insufficient data)')
+            return axes
 
         cbar_ax = axis.collections[0].colorbar
         cbar_ax.set_ticklabels(['p < 0.001', 'p < 0.01', 'p < 0.05', 'NS'])
@@ -469,10 +494,11 @@ class Plotter:
             'annot': True,
             'fmt': '.2f'
         }
-        return self._generic_heatmap_plot(a12_values,
-                                          axes,
-                                          heatmap_args,
-                                          shrink_cbar=0.1)
+        axis = self._generic_heatmap_plot(a12_values, axes, heatmap_args, shrink_cbar=0.1)
+        if axis is None:
+            axes.set_title('Effect size A12 (insufficient data)')
+            return axes
+        return axis
 
     def write_a12_heatmap_plot(self, a12_values, image_path):
         """Writes A12 heatmap plot."""

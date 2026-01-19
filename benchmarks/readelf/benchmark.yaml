@@ -1,0 +1,4 @@
+description: Binutils 2.28 readelf fuzzer
+target: readelf-fuzz
+cmdline: -a @@
+dictionary: readelf.dict
