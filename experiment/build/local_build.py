@@ -26,10 +26,29 @@ from common import utils
 
 logger = logs.Logger()  # pylint: disable=invalid-name
 
+def _get_make_jobs(default: int = 8) -> int:
+    """Return make parallelism (>=1). Controlled by FUZZBENCH_MAKE_JOBS."""
+    raw = os.getenv('FUZZBENCH_MAKE_JOBS', '').strip()
+    if not raw:
+        # 给一个保守默认值；你机器很强也先别放开，避免 Docker/veth 风暴。
+        return max(1, default)
+    try:
+        jobs = int(raw)
+        return max(1, jobs)
+    except ValueError:
+        logger.warning('Invalid FUZZBENCH_MAKE_JOBS=%r, fallback to %d', raw, default)
+        return max(1, default)
+
 
 def make(targets):
     """Invoke |make| with |targets| and return the result."""
-    command = ['make', '-j'] + targets
+    jobs = _get_make_jobs(default=8)
+
+    command = ['make', f'-j{jobs}'] + targets
+
+    if os.getenv('DEBUG_BUILD') == '1':
+        logger.info('[DEBUG_BUILD] running: %s', ' '.join(command))
+
     return new_process.execute(command, cwd=utils.ROOT_DIR)
 
 
