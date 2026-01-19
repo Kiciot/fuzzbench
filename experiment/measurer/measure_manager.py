@@ -22,11 +22,12 @@ import json
 import os
 import pathlib
 import posixpath
+import re
 import sys
 import tempfile
 import tarfile
 import time
-from typing import List
+from typing import List, Dict, Tuple, Optional
 import queue
 import psutil
 
@@ -60,11 +61,61 @@ SNAPSHOT_QUEUE_GET_TIMEOUT = 1
 SNAPSHOTS_BATCH_SAVE_SIZE = 100
 MEASUREMENT_LOOP_WAIT = 10
 
+# [Backoff Config]
+MISSING_BACKOFF_SECONDS = 60
+_next_check_at: Dict[Tuple[int, int], float] = {}
+
+# Regex for parsing corpus archive names (e.g. corpus-archive-0001.tar.gz)
+_CORPUS_RE = re.compile(r'^corpus-archive-(\d{4,6})\.tar\.gz$')
+
+
+# [PATH HELPERS] Unified logic for logical paths in experiment-folders
+def _trial_corpus_dir_logical(fuzzer: str, benchmark: str, trial_id: int) -> pathlib.Path:
+    """Returns the logical path to the corpus archives directory for a trial.
+    Format: <exp>/experiment-folders/<benchmark>-<fuzzer>/trial-<id>/corpus-archives
+    """
+    base = pathlib.Path(experiment_utils.get_experiment_folders_dir())
+    # Note: FuzzBench folder naming convention is <benchmark>-<fuzzer>
+    return base / f'{benchmark}-{fuzzer}' / f'trial-{trial_id}' / 'corpus-archives'
+
+
+def _corpus_archive_logical_path(fuzzer: str, benchmark: str, trial_id: int, cycle: int) -> pathlib.Path:
+    """Returns the logical path to a specific corpus archive."""
+    return _trial_corpus_dir_logical(fuzzer, benchmark, trial_id) / experiment_utils.get_corpus_archive_name(cycle)
+
+
+def _corpus_archive_exists(fuzzer: str, benchmark: str, trial_id: int, cycle: int) -> bool:
+    """Checks if the corpus archive exists in the filestore."""
+    logical = _corpus_archive_logical_path(fuzzer, benchmark, trial_id, cycle)
+    mapped = exp_path.filestore(logical)
+
+    if os.getenv('DEBUG_PATHS') == '1':
+        logger.info('[DEBUG_PATHS] exists? logical=%s mapped=%s', str(logical), str(mapped))
+
+    return filestore_utils.ls(mapped, must_exist=False).retcode == 0
+
+
+def _find_first_available_corpus_cycle(fuzzer: str, benchmark: str, trial_id: int) -> Optional[int]:
+    """Scans the trial's corpus directory to find the earliest available cycle."""
+    logical_dir = _trial_corpus_dir_logical(fuzzer, benchmark, trial_id)
+    mapped_dir = exp_path.filestore(logical_dir)
+
+    if not os.path.isdir(mapped_dir):
+        return None
+
+    cycles = []
+    for name in os.listdir(mapped_dir):
+        m = _CORPUS_RE.match(name)
+        if m:
+            cycles.append(int(m.group(1)))
+
+    return min(cycles) if cycles else None
+
 
 def exists_in_experiment_filestore(path: pathlib.Path) -> bool:
     """Returns True if |path| exists in the experiment_filestore."""
-    return filestore_utils.ls(exp_path.filestore(path),
-                              must_exist=False).retcode == 0
+    mapped = exp_path.filestore(path)
+    return filestore_utils.ls(mapped, must_exist=False).retcode == 0
 
 
 def measure_main(experiment_config):
@@ -249,11 +300,21 @@ def _get_unmeasured_first_snapshots(
     """Returns a list of unmeasured SnapshotMeasureRequests that are the first
     snapshot for their trial. The trials are trials in |experiment|."""
     trials_without_snapshots = _query_unmeasured_trials(experiment)
-    return [
-        measurer_datatypes.SnapshotMeasureRequest(trial.fuzzer, trial.benchmark,
-                                                  trial.id, 0)
-        for trial in trials_without_snapshots
-    ]
+    reqs = []
+    
+    # [SMART START] Check if cycle 0 exists. If not, try to find the earliest available cycle.
+    for trial in trials_without_snapshots:
+        first_cycle = 0
+        if not _corpus_archive_exists(trial.fuzzer, trial.benchmark, trial.id, 0):
+            # Fallback: scan disk for earliest available cycle
+            alt = _find_first_available_corpus_cycle(trial.fuzzer, trial.benchmark, trial.id)
+            if alt is not None:
+                first_cycle = alt
+        
+        reqs.append(measurer_datatypes.SnapshotMeasureRequest(
+            trial.fuzzer, trial.benchmark, trial.id, first_cycle
+        ))
+    return reqs
 
 
 SnapshotWithTime = collections.namedtuple(
@@ -483,9 +544,11 @@ class SnapshotMeasurer(coverage_utils.TrialCoverage):  # pylint: disable=too-man
         with tarfile.open(archive_path, 'w:gz') as tar:
             tar.add(self.crashes_dir,
                     arcname=os.path.basename(self.crashes_dir))
-        trial_crashes_dir = posixpath.join(self.trial_dir, 'crashes')
-        archive_filestore_path = exp_path.filestore(
-            posixpath.join(trial_crashes_dir, crashes_archive_name))
+        
+        # [STANDARDIZED] Use logical helper
+        logical_path = _trial_corpus_dir_logical(self.fuzzer, self.benchmark, self.trial_id).parent / 'crashes' / crashes_archive_name
+        archive_filestore_path = exp_path.filestore(logical_path)
+        
         filestore_utils.cp(archive_path, archive_filestore_path)
         os.remove(archive_path)
 
@@ -520,8 +583,11 @@ class SnapshotMeasurer(coverage_utils.TrialCoverage):  # pylint: disable=too-man
     def get_fuzzer_stats(self, cycle):
         """Get the fuzzer stats for |cycle|."""
         stats_filename = experiment_utils.get_stats_filename(cycle)
-        stats_filestore_path = exp_path.filestore(
-            os.path.join(self.trial_dir, stats_filename))
+        
+        # [STANDARDIZED] Use logical helper
+        logical_path = _trial_corpus_dir_logical(self.fuzzer, self.benchmark, self.trial_id).parent / stats_filename
+        stats_filestore_path = exp_path.filestore(logical_path)
+        
         try:
             return get_fuzzer_stats(stats_filestore_path)
         except (ValueError, json.decoder.JSONDecodeError):
@@ -590,44 +656,37 @@ def measure_snapshot_coverage(  # pylint: disable=too-many-locals
     snapshot_logger.info('Measuring cycle: %d.', cycle)
     this_time = experiment_utils.get_cycle_time(cycle)
 
-    # Attempt to locate and copy the corpus archive using candidate names/dirs.
-    corpus_archive_dst = None
-    dir_candidates = ['corpus-archives', 'corpus']
-    name_candidates = [
-        f'corpus-archive-{cycle:04d}.tar.gz',
-        f'corpus-archive-{cycle:06d}.tar.gz',
-        f'corpus-archive-{cycle}.tar.gz',
-    ]
+    # [STANDARDIZED] Use official FuzzBench naming convention
+    archive_name = experiment_utils.get_corpus_archive_name(cycle)
+    
+    # 1. Local Destination (Absolute Path on Runner/Measurer)
+    candidate_dst = os.path.join(snapshot_measurer.trial_dir, 'corpus-archives', archive_name)
 
-    found = False
-    for d in dir_candidates:
-        for n in name_candidates:
-            # Construct candidate local path
-            candidate_dst = os.path.join(snapshot_measurer.trial_dir, d, n)
-            # Map to filestore
-            candidate_src = exp_path.filestore(candidate_dst)
+    # 2. Logical Source (Using Unified Helper)
+    logical_src = _corpus_archive_logical_path(fuzzer, benchmark, trial_num, cycle)
+    
+    # Map the logical source to the actual filestore location
+    candidate_src = exp_path.filestore(logical_src)
 
-            candidate_dir = os.path.dirname(candidate_dst)
-            if not os.path.exists(candidate_dir):
-                os.makedirs(candidate_dir)
+    candidate_dir = os.path.dirname(candidate_dst)
+    if not os.path.exists(candidate_dir):
+        os.makedirs(candidate_dir)
 
-            if filestore_utils.cp(candidate_src,
-                                  candidate_dst,
-                                  expect_zero=False).retcode == 0:
-                corpus_archive_dst = candidate_dst
-                found = True
-                break
-        if found:
-            break
+    if os.getenv('DEBUG_PATHS') == '1':
+        snapshot_logger.info('[DEBUG] cp src=%s dst=%s', candidate_src, candidate_dst)
 
-    if not found:
+    cp_res = filestore_utils.cp(candidate_src,
+                                candidate_dst,
+                                expect_zero=False)
+
+    if cp_res.retcode != 0:
         snapshot_logger.warning('Corpus not found for cycle: %d.', cycle)
         return None
 
     snapshot_measurer.initialize_measurement_dirs()
-    snapshot_measurer.extract_corpus(corpus_archive_dst)
+    snapshot_measurer.extract_corpus(candidate_dst)
     # Don't keep corpus archives around longer than they need to be.
-    os.remove(corpus_archive_dst)
+    os.remove(candidate_dst)
 
     # Run coverage on the new corpus units.
     snapshot_measurer.run_cov_new_units()
@@ -636,9 +695,10 @@ def measure_snapshot_coverage(  # pylint: disable=too-many-locals
     snapshot_measurer.generate_coverage_information(cycle)
 
     # Compress and save the exported profdata snapshot.
+    coverage_archive_name = experiment_utils.get_coverage_archive_name(cycle) + '.gz'
     coverage_archive_zipped = os.path.join(
         snapshot_measurer.trial_dir, 'coverage',
-        experiment_utils.get_coverage_archive_name(cycle) + '.gz')
+        coverage_archive_name)
 
     coverage_archive_dir = os.path.dirname(coverage_archive_zipped)
     if not os.path.exists(coverage_archive_dir):
@@ -649,7 +709,10 @@ def measure_snapshot_coverage(  # pylint: disable=too-many-locals
             # avoid saving warnings so we can direct import with pandas
             compressed.write(uncompressed.readlines()[-1])
 
-    coverage_archive_dst = exp_path.filestore(coverage_archive_zipped)
+    # [STANDARDIZED] Use logical helper
+    logical_cov_path = _trial_corpus_dir_logical(fuzzer, benchmark, trial_num).parent / 'coverage' / coverage_archive_name
+    coverage_archive_dst = exp_path.filestore(logical_cov_path)
+
     if filestore_utils.cp(coverage_archive_zipped,
                           coverage_archive_dst,
                           expect_zero=False).retcode:
@@ -759,13 +822,31 @@ def measure_manager_inner_loop(experiment: str, max_cycle: int, request_queue,
 
     # Write measurements requests to request queue
     for unmeasured_snapshot in unmeasured_snapshots:
-        # No need to insert fuzzer and benchmark info here as it's redundant
-        # (Can be retrieved through trial_id).
         unmeasured_snapshot_identifier = (unmeasured_snapshot.trial_id,
                                           unmeasured_snapshot.cycle)
-        # Checking if snapshot already was queued so workers will not repeat
-        # measurement for same snapshot
+        
         if unmeasured_snapshot_identifier not in queued_snapshots:
+            
+            # [CRITICAL FIX: BACKOFF & CHECK]
+            # 1. Check if we are in backoff period for this specific snapshot
+            now = time.time()
+            if _next_check_at.get(unmeasured_snapshot_identifier, 0) > now:
+                continue
+
+            # 2. Check if file exists BEFORE dispatching to worker
+            if not _corpus_archive_exists(unmeasured_snapshot.fuzzer,
+                                          unmeasured_snapshot.benchmark,
+                                          unmeasured_snapshot.trial_id,
+                                          unmeasured_snapshot.cycle):
+                # If archive doesn't exist yet, set backoff timer and skip.
+                _next_check_at[unmeasured_snapshot_identifier] = now + MISSING_BACKOFF_SECONDS
+                
+                if os.getenv('DEBUG_PATHS') == '1':
+                    logger.debug('Skip dispatch: corpus archive not ready. trial=%s cycle=%s',
+                                 unmeasured_snapshot.trial_id, unmeasured_snapshot.cycle)
+                continue
+
+            # If we reach here, file exists. Proceed to dispatch.
             request_queue.put(unmeasured_snapshot)
             queued_snapshots.add(unmeasured_snapshot_identifier)
 
