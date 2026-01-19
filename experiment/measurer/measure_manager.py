@@ -59,47 +59,54 @@ RETRY_DELAY = 3
 FAIL_WAIT_SECONDS = 30
 SNAPSHOT_QUEUE_GET_TIMEOUT = 1
 SNAPSHOTS_BATCH_SAVE_SIZE = 100
-MEASUREMENT_LOOP_WAIT = 10
-
-# [Backoff Config]
+# Measurement loop tick:
+# - Default: half snapshot window (e.g. 900s snapshot -> 450s tick)
+# - Override: export FUZZBENCH_MEASUREMENT_LOOP_WAIT=<seconds>
+_DEFAULT_TICK = max(60, int(experiment_utils.get_snapshot_seconds() // 2))
+MEASUREMENT_LOOP_WAIT = int(os.getenv('FUZZBENCH_MEASUREMENT_LOOP_WAIT', str(_DEFAULT_TICK)))
+# [Backoff Configuration]
+# How long to wait before checking for a missing corpus archive again.
 MISSING_BACKOFF_SECONDS = 60
+# Cache to store the next allowed check time for (trial_id, cycle).
 _next_check_at: Dict[Tuple[int, int], float] = {}
 
 # Regex for parsing corpus archive names (e.g. corpus-archive-0001.tar.gz)
 _CORPUS_RE = re.compile(r'^corpus-archive-(\d{4,6})\.tar\.gz$')
 
 
-# [PATH HELPERS] Unified logic for logical paths in experiment-folders
-def _trial_corpus_dir_logical(fuzzer: str, benchmark: str, trial_id: int) -> pathlib.Path:
-    """Returns the logical path to the corpus archives directory for a trial.
-    Format: <exp>/experiment-folders/<benchmark>-<fuzzer>/trial-<id>/corpus-archives
-    """
+def _get_logical_trial_path(fuzzer: str, benchmark: str, trial_id: int) -> pathlib.Path:
+    """Logical path: experiment-folders/<benchmark>-<fuzzer>/trial-<id>"""
     base = pathlib.Path(experiment_utils.get_experiment_folders_dir())
-    # Note: FuzzBench folder naming convention is <benchmark>-<fuzzer>
-    return base / f'{benchmark}-{fuzzer}' / f'trial-{trial_id}' / 'corpus-archives'
-
-
-def _corpus_archive_logical_path(fuzzer: str, benchmark: str, trial_id: int, cycle: int) -> pathlib.Path:
-    """Returns the logical path to a specific corpus archive."""
-    return _trial_corpus_dir_logical(fuzzer, benchmark, trial_id) / experiment_utils.get_corpus_archive_name(cycle)
+    return base / f'{benchmark}-{fuzzer}' / f'trial-{trial_id}'
 
 
 def _corpus_archive_exists(fuzzer: str, benchmark: str, trial_id: int, cycle: int) -> bool:
-    """Checks if the corpus archive exists in the filestore."""
-    logical = _corpus_archive_logical_path(fuzzer, benchmark, trial_id, cycle)
-    mapped = exp_path.filestore(logical)
+    """Checks if the corpus archive for the given cycle exists in the filestore."""
+    trial_path = _get_logical_trial_path(fuzzer, benchmark, trial_id)
+    archive_name = experiment_utils.get_corpus_archive_name(cycle)
+    
+    # Logical path: experiment-folders/.../corpus-archives/corpus-archive-XXXX.tar.gz
+    logical_path = trial_path / 'corpus-archives' / archive_name
+    mapped_path = exp_path.filestore(logical_path)
 
     if os.getenv('DEBUG_PATHS') == '1':
-        logger.info('[DEBUG_PATHS] exists? logical=%s mapped=%s', str(logical), str(mapped))
+        logger.info('[DEBUG_PATHS] Checking existence: %s', mapped_path)
 
-    return filestore_utils.ls(mapped, must_exist=False).retcode == 0
+    return filestore_utils.ls(mapped_path, must_exist=False).retcode == 0
 
 
 def _find_first_available_corpus_cycle(fuzzer: str, benchmark: str, trial_id: int) -> Optional[int]:
     """Scans the trial's corpus directory to find the earliest available cycle."""
-    logical_dir = _trial_corpus_dir_logical(fuzzer, benchmark, trial_id)
+    trial_path = _get_logical_trial_path(fuzzer, benchmark, trial_id)
+    logical_dir = trial_path / 'corpus-archives'
     mapped_dir = exp_path.filestore(logical_dir)
 
+    # If the directory itself doesn't exist (or ls fails), return None
+    if filestore_utils.ls(mapped_dir, must_exist=False).retcode != 0:
+        return None
+
+    # Since filestore_utils.ls might return text or we are local, use os.listdir if local.
+    # For general filestore compatibility, we assume local experiment here.
     if not os.path.isdir(mapped_dir):
         return None
 
@@ -109,12 +116,18 @@ def _find_first_available_corpus_cycle(fuzzer: str, benchmark: str, trial_id: in
         if m:
             cycles.append(int(m.group(1)))
 
-    return min(cycles) if cycles else None
+    if not cycles:
+        return None
+    return min(cycles)
 
 
 def exists_in_experiment_filestore(path: pathlib.Path) -> bool:
     """Returns True if |path| exists in the experiment_filestore."""
     mapped = exp_path.filestore(path)
+    
+    if os.getenv('DEBUG_PATHS') == '1':
+        logger.info('[DEBUG_PATHS] exists_in? input=%s mapped=%s', str(path), str(mapped))
+        
     return filestore_utils.ls(mapped, must_exist=False).retcode == 0
 
 
@@ -200,6 +213,12 @@ def measure_all_trials(experiment: str, max_total_time: int, pool,
 
     max_cycle = _time_to_cycle(max_total_time)
     unmeasured_snapshots = get_unmeasured_snapshots(experiment, max_cycle)
+    if os.getenv('DEBUG_MEASURE_MANAGER') == '1':
+        logger.info('Retrieved %d unmeasured snapshots from measure manager',
+                len(unmeasured_snapshots))
+    else:
+        logger.debug('Retrieved %d unmeasured snapshots from measure manager',
+                len(unmeasured_snapshots))
 
     if not unmeasured_snapshots:
         return False
@@ -302,11 +321,12 @@ def _get_unmeasured_first_snapshots(
     trials_without_snapshots = _query_unmeasured_trials(experiment)
     reqs = []
     
-    # [SMART START] Check if cycle 0 exists. If not, try to find the earliest available cycle.
+    # [SMART START] Logic to jump start trials that missed cycle 0
     for trial in trials_without_snapshots:
         first_cycle = 0
+        # Check standard cycle 0 first
         if not _corpus_archive_exists(trial.fuzzer, trial.benchmark, trial.id, 0):
-            # Fallback: scan disk for earliest available cycle
+            # If 0 is missing, scan disk for the first available cycle
             alt = _find_first_available_corpus_cycle(trial.fuzzer, trial.benchmark, trial.id)
             if alt is not None:
                 first_cycle = alt
@@ -545,9 +565,13 @@ class SnapshotMeasurer(coverage_utils.TrialCoverage):  # pylint: disable=too-man
             tar.add(self.crashes_dir,
                     arcname=os.path.basename(self.crashes_dir))
         
-        # [STANDARDIZED] Use logical helper
-        logical_path = _trial_corpus_dir_logical(self.fuzzer, self.benchmark, self.trial_id).parent / 'crashes' / crashes_archive_name
-        archive_filestore_path = exp_path.filestore(logical_path)
+        # [STANDARDIZED] Use logical helper for proper filestore mapping
+        # This fixes "writing crashes to local path instead of filestore" issues.
+        logical_crash_path = (pathlib.Path(experiment_utils.get_experiment_folders_dir()) /
+                              self.benchmark_fuzzer_trial_dir /
+                              'crashes' /
+                              crashes_archive_name)
+        archive_filestore_path = exp_path.filestore(logical_crash_path)
         
         filestore_utils.cp(archive_path, archive_filestore_path)
         os.remove(archive_path)
@@ -584,9 +608,11 @@ class SnapshotMeasurer(coverage_utils.TrialCoverage):  # pylint: disable=too-man
         """Get the fuzzer stats for |cycle|."""
         stats_filename = experiment_utils.get_stats_filename(cycle)
         
-        # [STANDARDIZED] Use logical helper
-        logical_path = _trial_corpus_dir_logical(self.fuzzer, self.benchmark, self.trial_id).parent / stats_filename
-        stats_filestore_path = exp_path.filestore(logical_path)
+        # [STANDARDIZED] Use logical helper for stats reading
+        logical_stats_path = (pathlib.Path(experiment_utils.get_experiment_folders_dir()) /
+                              self.benchmark_fuzzer_trial_dir /
+                              stats_filename)
+        stats_filestore_path = exp_path.filestore(logical_stats_path)
         
         try:
             return get_fuzzer_stats(stats_filestore_path)
@@ -656,14 +682,25 @@ def measure_snapshot_coverage(  # pylint: disable=too-many-locals
     snapshot_logger.info('Measuring cycle: %d.', cycle)
     this_time = experiment_utils.get_cycle_time(cycle)
 
-    # [STANDARDIZED] Use official FuzzBench naming convention
+    # [DEBUG] Debug logging
+    debug = os.getenv('DEBUG_PATHS') == '1'
+    if debug:
+        snapshot_logger.info('[DEBUG] trial_dir=%s', snapshot_measurer.trial_dir)
+        snapshot_logger.info('[DEBUG] PWD=%s', os.getcwd())
+
+    # [STANDARDIZED] Standard corpus name and path
     archive_name = experiment_utils.get_corpus_archive_name(cycle)
     
     # 1. Local Destination (Absolute Path on Runner/Measurer)
     candidate_dst = os.path.join(snapshot_measurer.trial_dir, 'corpus-archives', archive_name)
 
-    # 2. Logical Source (Using Unified Helper)
-    logical_src = _corpus_archive_logical_path(fuzzer, benchmark, trial_num, cycle)
+    # 2. Logical Source (Using Unified Helper to match Manager logic)
+    # Reconstructing the path relative to experiment root to map correctly to Filestore.
+    base_logical_dir = experiment_utils.get_experiment_folders_dir()
+    logical_src = pathlib.Path(base_logical_dir) / \
+                  snapshot_measurer.benchmark_fuzzer_trial_dir / \
+                  'corpus-archives' / \
+                  archive_name
     
     # Map the logical source to the actual filestore location
     candidate_src = exp_path.filestore(logical_src)
@@ -672,14 +709,19 @@ def measure_snapshot_coverage(  # pylint: disable=too-many-locals
     if not os.path.exists(candidate_dir):
         os.makedirs(candidate_dir)
 
-    if os.getenv('DEBUG_PATHS') == '1':
-        snapshot_logger.info('[DEBUG] cp src=%s dst=%s', candidate_src, candidate_dst)
+    if debug:
+        snapshot_logger.info('[DEBUG] logical_src=%s', str(logical_src))
+        snapshot_logger.info('[DEBUG] candidate_src=%s', candidate_src)
 
     cp_res = filestore_utils.cp(candidate_src,
                                 candidate_dst,
                                 expect_zero=False)
 
+    if debug:
+        snapshot_logger.info('[DEBUG] cp retcode=%s', getattr(cp_res, 'retcode', 'N/A'))
+
     if cp_res.retcode != 0:
+        # This shouldn't happen often thanks to Manager pre-check, but possible due to race conditions.
         snapshot_logger.warning('Corpus not found for cycle: %d.', cycle)
         return None
 
@@ -709,8 +751,11 @@ def measure_snapshot_coverage(  # pylint: disable=too-many-locals
             # avoid saving warnings so we can direct import with pandas
             compressed.write(uncompressed.readlines()[-1])
 
-    # [STANDARDIZED] Use logical helper
-    logical_cov_path = _trial_corpus_dir_logical(fuzzer, benchmark, trial_num).parent / 'coverage' / coverage_archive_name
+    # [FIXED] Use correct logical base for coverage archive
+    logical_cov_path = (pathlib.Path(base_logical_dir) /
+                        snapshot_measurer.benchmark_fuzzer_trial_dir /
+                        'coverage' /
+                        coverage_archive_name)
     coverage_archive_dst = exp_path.filestore(logical_cov_path)
 
     if filestore_utils.cp(coverage_archive_zipped,
@@ -814,51 +859,63 @@ def measure_manager_inner_loop(experiment: str, max_cycle: int, request_queue,
     initialize_logs()
     # Read database to determine which snapshots needs measuring.
     unmeasured_snapshots = get_unmeasured_snapshots(experiment, max_cycle)
-    logger.info('Retrieved %d unmeasured snapshots from measure manager',
+
+    if os.getenv('DEBUG_MEASURE_MANAGER') == '1':
+        logger.info('Retrieved %d unmeasured snapshots from measure manager',
                 len(unmeasured_snapshots))
+    else:
+        logger.debug('Retrieved %d unmeasured snapshots from measure manager',
+                len(unmeasured_snapshots))
+
     # When there are no more snapshots left to be measured, should break loop.
     if not unmeasured_snapshots:
         return False
 
     # Write measurements requests to request queue
+    dispatched = 0
     for unmeasured_snapshot in unmeasured_snapshots:
         unmeasured_snapshot_identifier = (unmeasured_snapshot.trial_id,
                                           unmeasured_snapshot.cycle)
-        
+        # Checking if snapshot already was queued so workers will not repeat
+        # measurement for same snapshot
         if unmeasured_snapshot_identifier not in queued_snapshots:
             
-            # [CRITICAL FIX: BACKOFF & CHECK]
-            # 1. Check if we are in backoff period for this specific snapshot
+            # [CRITICAL FIX] Check Backoff Timer
             now = time.time()
             if _next_check_at.get(unmeasured_snapshot_identifier, 0) > now:
                 continue
 
-            # 2. Check if file exists BEFORE dispatching to worker
+            # [CRITICAL FIX] Check Existence Before Dispatching
             if not _corpus_archive_exists(unmeasured_snapshot.fuzzer,
                                           unmeasured_snapshot.benchmark,
                                           unmeasured_snapshot.trial_id,
                                           unmeasured_snapshot.cycle):
-                # If archive doesn't exist yet, set backoff timer and skip.
+                # Backoff for 60 seconds
                 _next_check_at[unmeasured_snapshot_identifier] = now + MISSING_BACKOFF_SECONDS
                 
+                # Only log debug to keep things quiet
                 if os.getenv('DEBUG_PATHS') == '1':
                     logger.debug('Skip dispatch: corpus archive not ready. trial=%s cycle=%s',
                                  unmeasured_snapshot.trial_id, unmeasured_snapshot.cycle)
                 continue
 
-            # If we reach here, file exists. Proceed to dispatch.
             request_queue.put(unmeasured_snapshot)
             queued_snapshots.add(unmeasured_snapshot_identifier)
+            dispatched += 1
 
     # Read results from response queue.
     measured_snapshots = consume_snapshots_from_response_queue(
         response_queue, queued_snapshots)
-    logger.info('Retrieved %d measured snapshots from response queue',
-                len(measured_snapshots))
 
-    # Save measured snapshots to database.
-    if measured_snapshots:
+    measured_cnt = len(measured_snapshots)
+    if measured_cnt:
         db_utils.add_all(measured_snapshots)
+
+    # Only emit INFO when there is real work done.
+    if dispatched or measured_cnt:
+        logger.info('Measure manager tick: dispatched=%d measured=%d', dispatched, measured_cnt)
+    else:
+        logger.debug('Measure manager tick: dispatched=%d measured=%d', dispatched, measured_cnt)
 
     return True
 
