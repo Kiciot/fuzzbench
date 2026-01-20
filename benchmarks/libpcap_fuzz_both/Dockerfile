@@ -15,33 +15,93 @@
 ################################################################################
 
 FROM gcr.io/oss-fuzz-base/base-builder@sha256:87ca1e9e19235e731fac8de8d1892ebe8d55caf18e7aa131346fc582a2034fdd
-ENV HTTP_PROXY=http://172.17.0.1:7890
-ENV HTTPS_PROXY=http://172.17.0.1:7890
-ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
-ENV http_proxy=$HTTP_PROXY
-ENV https_proxy=$HTTPS_PROXY
-ENV no_proxy=$NO_PROXY
-RUN git config --global http.proxy http://172.17.0.1:7890
-RUN git config --global http.sslVerify false
-# ======================
 
-# 安装构建依赖 (libpcap 需要 flex 和 bison 进行语法解析)
-RUN apt-get update && \
-    apt-get install -y \
-    make \
-    cmake \
-    flex \
-    bison
+# -----------------------------
+# Proxy (build-time configurable)
+# -----------------------------
+ARG HTTP_PROXY=http://172.17.0.1:7890
+ARG HTTPS_PROXY=http://172.17.0.1:7890
+ARG NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
+ARG GIT_SSL_NO_VERIFY=1
 
-# === 2. 版本锁定: libpcap-1.10.0 ===
-# 锁定到 1.10.0 官方 tag
-RUN git clone \
-    --depth 1 \
-    --branch libpcap-1.10.0 \
-    https://github.com/the-tcpdump-group/libpcap.git libpcap
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY} \
+    http_proxy=${HTTP_PROXY} \
+    https_proxy=${HTTPS_PROXY} \
+    no_proxy=${NO_PROXY}
 
-RUN git clone https://github.com/the-tcpdump-group/tcpdump.git tcpdump && \
+# -----------------------------
+# APT stability: mirror + retries + timeouts
+# -----------------------------
+RUN set -eux; \
+    if [ -f /etc/apt/sources.list ]; then \
+      sed -i 's|http://archive.ubuntu.com/ubuntu|http://mirrors.edge.kernel.org/ubuntu|g' /etc/apt/sources.list || true; \
+      sed -i 's|http://security.ubuntu.com/ubuntu|http://mirrors.edge.kernel.org/ubuntu|g' /etc/apt/sources.list || true; \
+    fi; \
+    printf 'Acquire::Retries "8";\nAcquire::http::Timeout "60";\nAcquire::https::Timeout "60";\nAcquire::http::Pipeline-Depth "0";\n' \
+      > /etc/apt/apt.conf.d/80-fuzzbench-retries
+
+# -----------------------------
+# Tooling install (with retries)
+# -----------------------------
+RUN set -eux; \
+    for i in 1 2 3 4 5; do \
+      apt-get update && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+        make \
+        cmake \
+        flex \
+        bison \
+      && break; \
+      echo "apt-get failed, retry $i/5"; \
+      sleep 10; \
+      apt-get update --fix-missing || true; \
+    done; \
+    rm -rf /var/lib/apt/lists/*
+
+# -----------------------------
+# Git robustness (proxy + optional SSL verify off)
+# -----------------------------
+RUN set -eux; \
+    git config --global http.proxy "${HTTP_PROXY}"; \
+    git config --global https.proxy "${HTTPS_PROXY}"; \
+    git config --global http.lowSpeedLimit 1000; \
+    git config --global http.lowSpeedTime 60; \
+    git config --global http.postBuffer 524288000; \
+    git config --global core.compression 0; \
+    if [ "${GIT_SSL_NO_VERIFY}" = "1" ]; then \
+      git config --global http.sslVerify false; \
+    fi
+
+# -----------------------------
+# Fetch sources (pinned versions)
+# -----------------------------
+WORKDIR $SRC
+
+# libpcap: tag libpcap-1.10.0
+RUN set -eux; \
+    for i in 1 2 3 4 5; do \
+      rm -rf libpcap; \
+      git clone --depth 1 --branch libpcap-1.10.0 \
+        https://github.com/the-tcpdump-group/libpcap.git libpcap && break; \
+      echo "git clone libpcap failed, retry $i/5"; \
+      sleep 10; \
+    done; \
+    test -d libpcap
+
+# tcpdump: specific commit
+RUN set -eux; \
+    for i in 1 2 3 4 5; do \
+      rm -rf tcpdump; \
+      git clone --filter=blob:none https://github.com/the-tcpdump-group/tcpdump.git tcpdump && break; \
+      echo "git clone tcpdump failed, retry $i/5"; \
+      sleep 10; \
+    done; \
+    test -d tcpdump; \
     git -C tcpdump checkout 032e4923e5202ea4d5a6d1cead83ed1927135874
 
-WORKDIR $SRC
+# Copy build script last for better Docker layer caching
 COPY build.sh $SRC/
