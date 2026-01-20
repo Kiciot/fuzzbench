@@ -29,6 +29,13 @@
 ARG fuzzer
 ARG benchmark
 
+# -----------------------------
+# Proxy (build-time configurable)
+# -----------------------------
+ARG HTTP_PROXY=http://172.17.0.1:7890
+ARG HTTPS_PROXY=http://172.17.0.1:7890
+ARG NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
+
 # We use Docker's multi-stage build feature to create a minimal runner image,
 # separate from the sometimes bulky builder images.
 
@@ -40,33 +47,54 @@ FROM gcr.io/fuzzbench/builders/$fuzzer/$benchmark AS builder
 # runner.Dockerfile of each fuzzer.
 FROM gcr.io/fuzzbench/runners/$fuzzer/$benchmark-intermediate
 
-# Install runtime dependencies for benchmarks.
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY} \
+    http_proxy=${HTTP_PROXY} \
+    https_proxy=${HTTPS_PROXY} \
+    no_proxy=${NO_PROXY}
 
-RUN apt-get update -y && \
-    DEBIAN_FRONTEND="noninteractive" apt-get install -y \
-    libglib2.0-0 \
-    libxml2 \
-    libarchive13 \
-    libgss3
+# -----------------------------
+# APT robustness (retries/timeouts)
+# -----------------------------
+RUN set -eux; \
+    printf '%s\n' \
+      'Acquire::Retries "8";' \
+      'Acquire::http::Timeout "60";' \
+      'Acquire::https::Timeout "60";' \
+      'Acquire::http::Pipeline-Depth "0";' \
+      'Acquire::https::Pipeline-Depth "0";' \
+      > /etc/apt/apt.conf.d/80-fuzzbench-retries
+
+# Install runtime dependencies for benchmarks (retry loop for proxy flakiness).
+RUN set -eux; \
+    for i in 1 2 3 4 5 6 7 8; do \
+      apt-get update -y && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        libglib2.0-0 \
+        libxml2 \
+        libarchive13 \
+        libgss3 \
+      && break; \
+      echo "apt-get failed ($i/8), retrying..."; \
+      sleep 10; \
+      apt-get update --fix-missing || true; \
+    done; \
+    rm -rf /var/lib/apt/lists/*
 
 # Set up the directory for the build artifacts.
-ENV OUT /out
-ENV WORKDIR /out
-ENV HTTP_PROXY=http://172.17.0.1:7890
-ENV HTTPS_PROXY=http://172.17.0.1:7890
-ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
+ENV OUT=/out
+ENV WORKDIR=/out
 
-ENV http_proxy=$HTTP_PROXY
-ENV https_proxy=$HTTPS_PROXY
-ENV no_proxy=$NO_PROXY
-RUN mkdir -p $WORKDIR
-WORKDIR $WORKDIR
+RUN mkdir -p "$WORKDIR"
+WORKDIR "$WORKDIR"
 
 ENV ROOT_DIR=/src
 
 # Copy over all the build artifacts (without * to preserve directory structure).
 # This also copies seed and dictionary files if they are available.
 COPY --from=builder /out/ ./
+
 # Copy the benchmarks directory.
 COPY benchmarks $ROOT_DIR/benchmarks
 # Copy the fuzzers directory.
@@ -79,7 +107,7 @@ ENV SEED_CORPUS_DIR=$WORKDIR/seeds
 ENV OUTPUT_CORPUS_DIR=$WORKDIR/corpus
 
 # Create the seeds directory if it doesn't exist.
-RUN mkdir -p $SEED_CORPUS_DIR $OUTPUT_CORPUS_DIR
+RUN mkdir -p "$SEED_CORPUS_DIR" "$OUTPUT_CORPUS_DIR"
 
 # Copy the source code into the image. We do this here instead of in base-image
 # because it is likely to change, particularly in development. If this were done
