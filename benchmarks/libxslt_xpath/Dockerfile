@@ -1,17 +1,5 @@
 # Copyright 2019 Google Inc.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
+# Licensed under the Apache License, Version 2.0
 ################################################################################
 
 FROM gcr.io/oss-fuzz-base/base-builder@sha256:87ca1e9e19235e731fac8de8d1892ebe8d55caf18e7aa131346fc582a2034fdd
@@ -45,13 +33,12 @@ RUN set -eux; \
 # -----------------------------
 # Toolchain versions (manual build)
 # -----------------------------
-# Need to build M4-1.4.19, autoconf-2.71, automake-1.16.x manually for Ubuntu 20.04-based base images.
 ENV M4_VERSION=1.4.19
 ENV AUTOCONF_VERSION=2.71
 ENV AUTOMAKE_VERSION=1.16.5
 
 # -----------------------------
-# Base deps + robust downloads/builds
+# Base deps + robust installs
 # -----------------------------
 RUN set -eux; \
     for i in 1 2 3 4 5; do \
@@ -65,6 +52,10 @@ RUN set -eux; \
         libtool \
         pkg-config \
         libgcrypt-dev \
+        xz-utils \
+        flex \
+        bison \
+        zip \
       && break; \
       echo "apt-get failed, retry $i/5"; \
       sleep 10; \
@@ -87,27 +78,27 @@ RUN set -eux; \
     fi
 
 # -----------------------------
-# Helper: download-with-retry (GNU mirrors sometimes flap behind proxies)
+# Helper: download-with-retry (NO heredoc; avoid "unterminated heredoc")
 # -----------------------------
 RUN set -eux; \
-    cat > /usr/local/bin/_dl_retry <<'SH'; \
-#!/bin/sh
-set -eu
-url="$1"
-out="$2"
-i=1
-while [ "$i" -le 8 ]; do
-  rm -f "$out"
-  if wget -O "$out" --tries=3 --timeout=60 "$url"; then
-    exit 0
-  fi
-  echo "download failed ($i/8): $url"
-  i=$((i+1))
-  sleep 10
-done
-echo "download permanently failed: $url" >&2
-exit 1
-SH
+    printf '%s\n' \
+'#!/bin/sh' \
+'set -eu' \
+'url="$1"' \
+'out="$2"' \
+'i=1' \
+'while [ "$i" -le 8 ]; do' \
+'  rm -f "$out"' \
+'  if wget -O "$out" --tries=3 --timeout=60 "$url"; then' \
+'    exit 0' \
+'  fi' \
+'  echo "download failed ($i/8): $url"' \
+'  i=$((i+1))' \
+'  sleep 10' \
+'done' \
+'echo "download permanently failed: $url" >&2' \
+'exit 1' \
+    > /usr/local/bin/_dl_retry; \
     chmod +x /usr/local/bin/_dl_retry
 
 # -----------------------------
@@ -150,17 +141,19 @@ RUN set -eux; \
     make -j"$(nproc)"; \
     make install; \
     cd /; \
-    rm -rf "/tmp/automake-${AUTOMAKE_VERSION}"
+    rm -rf "/tmp/automake-${AUTOMAKE_VERSION}"; \
+    v="$(automake --version | head -n1 | awk '{print $NF}')"; \
+    dpkg --compare-versions "$v" ge "1.16.3"; \
+    echo "automake version OK: $v"
 
 # Use the newly installed aclocal macros.
-ENV ACLOCAL_PATH='/usr/share/aclocal/'
+ENV ACLOCAL_PATH=/usr/share/aclocal/
 
 # -----------------------------
 # Fetch sources (with retries)
 # -----------------------------
 WORKDIR $SRC
 
-# libxml2 pinned commit + libxslt head
 RUN set -eux; \
     for i in 1 2 3 4 5; do \
       rm -rf libxml2; \
@@ -169,8 +162,7 @@ RUN set -eux; \
       sleep 10; \
     done; \
     test -d libxml2; \
-    cd libxml2; \
-    git checkout c7260a47f19e01f4f663b6a56fbdc2dafd8a6e7e
+    git -C libxml2 checkout c7260a47f19e01f4f663b6a56fbdc2dafd8a6e7e
 
 RUN set -eux; \
     for i in 1 2 3 4 5; do \
