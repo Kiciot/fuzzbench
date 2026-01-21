@@ -11,6 +11,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG HTTP_PROXY=http://172.17.0.1:7890
 ARG HTTPS_PROXY=http://172.17.0.1:7890
 ARG NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
+
 # 代理总开关：代理不稳定时可直接 --build-arg USE_PROXY=0
 ARG USE_PROXY=1
 
@@ -19,7 +20,8 @@ ENV HTTP_PROXY=${HTTP_PROXY} \
     NO_PROXY=${NO_PROXY} \
     http_proxy=${HTTP_PROXY} \
     https_proxy=${HTTPS_PROXY} \
-    no_proxy=${NO_PROXY}
+    no_proxy=${NO_PROXY} \
+    USE_PROXY=${USE_PROXY}
 
 # Optional: allow overriding Ubuntu mirror if your route makes some mirrors flaky.
 ARG UBUNTU_MIRROR=http://archive.ubuntu.com/ubuntu
@@ -30,6 +32,7 @@ ENV PYTHON_VERSION=3.10.8
 
 # make 并行度可控：避免在小机器/CI 里把内存打爆
 ARG MAKE_JOBS=0
+ENV MAKE_JOBS=${MAKE_JOBS}
 
 # -----------------------------
 # APT robustness (retries/timeouts) + optional mirror replace
@@ -51,22 +54,22 @@ RUN set -eux; \
 # Helper: robust apt install (no upgrade)
 # -----------------------------
 RUN set -eux; \
-    cat > /usr/local/bin/_apt_install <<'SH'; \
-#!/bin/sh
-set -eu
-i=1
-while [ "$i" -le 8 ]; do
-  apt-get update && \
-  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" && \
-  exit 0
-  echo "apt-get install failed ($i/8): $*" >&2
-  i=$((i+1))
-  sleep 5
-  apt-get update --fix-missing || true
-done
-echo "apt-get install permanently failed: $*" >&2
-exit 1
-SH
+    printf '%s\n' \
+'#!/bin/sh' \
+'set -eu' \
+'i=1' \
+'while [ "$i" -le 8 ]; do' \
+'  apt-get update && \' \
+'  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" && \' \
+'  exit 0' \
+'  echo "apt-get install failed ($i/8): $*" >&2' \
+'  i=$((i+1))' \
+'  sleep 5' \
+'  apt-get update --fix-missing || true' \
+'done' \
+'echo "apt-get install permanently failed: $*" >&2' \
+'exit 1' \
+      > /usr/local/bin/_apt_install; \
     chmod +x /usr/local/bin/_apt_install
 
 # -----------------------------
@@ -95,57 +98,54 @@ RUN set -eux; \
 # usage: _curl_dl <url1> [url2] [url3] <out>
 # -----------------------------
 RUN set -eux; \
-    cat > /usr/local/bin/_curl_dl <<'SH'; \
-#!/bin/sh
-set -eu
-url1="${1:-}"
-url2="${2:-}"
-url3="${3:-}"
-out="${4:-}"
-[ -n "$url1" ] && [ -n "$out" ] || { echo "usage: _curl_dl <url1> [url2] [url3] <out>" >&2; exit 2; }
-
-try_one() {
-  url="$1"
-  # 代理优先（如果 USE_PROXY=1），失败后再直连兜底
-  if [ "${USE_PROXY:-1}" = "1" ]; then
-    # 使用环境变量代理
-    if curl -fL \
-        --retry 8 --retry-connrefused --retry-delay 5 --retry-max-time 300 \
-        --connect-timeout 20 --max-time 600 \
-        -o "$out" "$url"; then
-      return 0
-    fi
-    echo "download failed via proxy: $url" >&2
-  fi
-
-  # 直连兜底：清掉代理环境变量
-  if env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
-       curl -fL \
-        --retry 8 --retry-connrefused --retry-delay 5 --retry-max-time 300 \
-        --connect-timeout 20 --max-time 600 \
-        -o "$out" "$url"; then
-    return 0
-  fi
-  echo "download failed via direct: $url" >&2
-  return 1
-}
-
-for url in "$url1" "$url2" "$url3"; do
-  [ -n "$url" ] || continue
-  i=1
-  while [ "$i" -le 3 ]; do
-    rm -f "$out"
-    if try_one "$url"; then
-      exit 0
-    fi
-    i=$((i+1))
-    sleep 3
-  done
-done
-
-echo "download permanently failed (all mirrors): $url1" >&2
-exit 1
-SH
+    printf '%s\n' \
+'#!/bin/sh' \
+'set -eu' \
+'url1="${1:-}"' \
+'url2="${2:-}"' \
+'url3="${3:-}"' \
+'out="${4:-}"' \
+'[ -n "$url1" ] && [ -n "$out" ] || { echo "usage: _curl_dl <url1> [url2] [url3] <out>" >&2; exit 2; }' \
+'' \
+'try_one() {' \
+'  url="$1"' \
+'  if [ "${USE_PROXY:-1}" = "1" ]; then' \
+'    if curl -fL \' \
+'        --retry 8 --retry-connrefused --retry-delay 5 --retry-max-time 300 \' \
+'        --connect-timeout 20 --max-time 600 \' \
+'        -o "$out" "$url"; then' \
+'      return 0' \
+'    fi' \
+'    echo "download failed via proxy: $url" >&2' \
+'  fi' \
+'' \
+'  if env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \' \
+'       curl -fL \' \
+'        --retry 8 --retry-connrefused --retry-delay 5 --retry-max-time 300 \' \
+'        --connect-timeout 20 --max-time 600 \' \
+'        -o "$out" "$url"; then' \
+'    return 0' \
+'  fi' \
+'  echo "download failed via direct: $url" >&2' \
+'  return 1' \
+'}' \
+'' \
+'for url in "$url1" "$url2" "$url3"; do' \
+'  [ -n "$url" ] || continue' \
+'  i=1' \
+'  while [ "$i" -le 3 ]; do' \
+'    rm -f "$out"' \
+'    if try_one "$url"; then' \
+'      exit 0' \
+'    fi' \
+'    i=$((i+1))' \
+'    sleep 3' \
+'  done' \
+'done' \
+'' \
+'echo "download permanently failed (all mirrors): $url1" >&2' \
+'exit 1' \
+      > /usr/local/bin/_curl_dl; \
     chmod +x /usr/local/bin/_curl_dl
 
 # -----------------------------
