@@ -32,7 +32,7 @@ make -j$(nproc)
 # 3. 复制目标文件
 # Binutils 编译好的文件通常在 binutils/ 目录下
 # 我们将其重命名为 nm-new 以符合 benchmark 名字
-cp binutils/nm-new $OUT/nm-new
+cp -f "$BUILD_DIR/binutils/nm-new" "$OUT/nm-new"
 
 # 4. 生成种子
 # 我们使用 binutils 源码中的一些对象文件作为种子
