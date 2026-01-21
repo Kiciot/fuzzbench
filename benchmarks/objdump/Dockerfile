@@ -56,7 +56,9 @@ RUN set -eux; \
   rm -rf /var/lib/apt/lists/*
 
 # -----------------------------
-# Helper: download-with-retry (no curl new flags)
+# Helper: download-with-retry (compatible curl flags)
+# - Avoids curl options that are missing on older distros.
+# - Supports up to 3 mirror URLs.
 # -----------------------------
 RUN set -eux; \
   printf '%s\n' \
@@ -87,18 +89,22 @@ RUN set -eux; \
 
 # -----------------------------
 # Fetch & build binutils (release tarball, avoid git clone)
+# Notes:
+# - Fixes incorrect mirror path: ftpmirror needs /gnu/ prefix.
+# - Prefer .tar.gz: more widely available across mirrors than .tar.xz.
+# - Uses 3 sources: GNU, ftpmirror, kernel.org.
 # -----------------------------
 ENV BINUTILS_VER=2.28
 
 WORKDIR /tmp
 RUN set -eux; \
   _dl_retry \
-    "https://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VER}.tar.xz" \
-    "https://ftpmirror.gnu.org/binutils/binutils-${BINUTILS_VER}.tar.xz" \
-    "https://mirrors.kernel.org/gnu/binutils/binutils-${BINUTILS_VER}.tar.xz" \
-    "/tmp/binutils.tar.xz"; \
-  tar -xf /tmp/binutils.tar.xz; \
-  rm -f /tmp/binutils.tar.xz; \
+    "https://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VER}.tar.gz" \
+    "https://ftpmirror.gnu.org/gnu/binutils/binutils-${BINUTILS_VER}.tar.gz" \
+    "https://mirrors.kernel.org/gnu/binutils/binutils-${BINUTILS_VER}.tar.gz" \
+    "/tmp/binutils.tar.gz"; \
+  tar -xf /tmp/binutils.tar.gz; \
+  rm -f /tmp/binutils.tar.gz; \
   mkdir -p "/tmp/binutils-build"; \
   cd "/tmp/binutils-build"; \
   "../binutils-${BINUTILS_VER}/configure" --disable-nls --disable-werror; \
