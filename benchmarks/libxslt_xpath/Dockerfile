@@ -57,10 +57,11 @@ RUN set -eux; \
         bison \
         zip \
       && break; \
-      echo "apt-get failed, retry $i/5"; \
+      echo "apt-get failed, retry $i/5" >&2; \
       sleep 10; \
       apt-get update --fix-missing || true; \
     done; \
+    update-ca-certificates || true; \
     rm -rf /var/lib/apt/lists/*
 
 # -----------------------------
@@ -78,34 +79,46 @@ RUN set -eux; \
     fi
 
 # -----------------------------
-# Helper: download-with-retry (NO heredoc; avoid "unterminated heredoc")
+# Helper: download-with-retry (curl + mirror fallback)
+# Usage:
+#   _dl_retry <url1> [url2] [url3] <out>
 # -----------------------------
 RUN set -eux; \
     printf '%s\n' \
 '#!/bin/sh' \
 'set -eu' \
-'url="$1"' \
-'out="$2"' \
-'i=1' \
-'while [ "$i" -le 8 ]; do' \
-'  rm -f "$out"' \
-'  if wget -O "$out" --tries=3 --timeout=60 "$url"; then' \
-'    exit 0' \
-'  fi' \
-'  echo "download failed ($i/8): $url"' \
-'  i=$((i+1))' \
-'  sleep 10' \
+'url1="${1:-}"' \
+'url2="${2:-}"' \
+'url3="${3:-}"' \
+'out="${4:-}"' \
+'[ -n "$url1" ] && [ -n "$out" ] || { echo "usage: _dl_retry <url1> [url2] [url3] <out>" >&2; exit 2; }' \
+'for url in "$url1" "$url2" "$url3"; do' \
+'  [ -n "$url" ] || continue' \
+'  i=1' \
+'  while [ "$i" -le 8 ]; do' \
+'    rm -f "$out"' \
+'    if curl -fL --retry 3 --retry-all-errors --connect-timeout 15 --max-time 300 -o "$out" "$url"; then' \
+'      exit 0' \
+'    fi' \
+'    echo "download failed ($i/8): $url" >&2' \
+'    i=$((i+1))' \
+'    sleep 5' \
+'  done' \
 'done' \
-'echo "download permanently failed: $url" >&2' \
+'echo "download permanently failed (all mirrors): $url1" >&2' \
 'exit 1' \
     > /usr/local/bin/_dl_retry; \
     chmod +x /usr/local/bin/_dl_retry
 
 # -----------------------------
-# Build m4
+# Build m4 (mirror fallback)
 # -----------------------------
 RUN set -eux; \
-    _dl_retry "https://ftp.gnu.org/gnu/m4/m4-${M4_VERSION}.tar.gz" "/tmp/m4.tar.gz"; \
+    _dl_retry \
+      "https://ftp.gnu.org/gnu/m4/m4-${M4_VERSION}.tar.gz" \
+      "https://ftpmirror.gnu.org/m4/m4-${M4_VERSION}.tar.gz" \
+      "https://mirrors.kernel.org/gnu/m4/m4-${M4_VERSION}.tar.gz" \
+      "/tmp/m4.tar.gz"; \
     tar -C /tmp -xf /tmp/m4.tar.gz; \
     rm -f /tmp/m4.tar.gz; \
     cd "/tmp/m4-${M4_VERSION}"; \
@@ -116,10 +129,14 @@ RUN set -eux; \
     rm -rf "/tmp/m4-${M4_VERSION}"
 
 # -----------------------------
-# Build autoconf
+# Build autoconf (mirror fallback)
 # -----------------------------
 RUN set -eux; \
-    _dl_retry "https://ftp.gnu.org/gnu/autoconf/autoconf-${AUTOCONF_VERSION}.tar.gz" "/tmp/autoconf.tar.gz"; \
+    _dl_retry \
+      "https://ftp.gnu.org/gnu/autoconf/autoconf-${AUTOCONF_VERSION}.tar.gz" \
+      "https://ftpmirror.gnu.org/autoconf/autoconf-${AUTOCONF_VERSION}.tar.gz" \
+      "https://mirrors.kernel.org/gnu/autoconf/autoconf-${AUTOCONF_VERSION}.tar.gz" \
+      "/tmp/autoconf.tar.gz"; \
     tar -C /tmp -xf /tmp/autoconf.tar.gz; \
     rm -f /tmp/autoconf.tar.gz; \
     cd "/tmp/autoconf-${AUTOCONF_VERSION}"; \
@@ -130,10 +147,14 @@ RUN set -eux; \
     rm -rf "/tmp/autoconf-${AUTOCONF_VERSION}"
 
 # -----------------------------
-# Build automake
+# Build automake (mirror fallback)
 # -----------------------------
 RUN set -eux; \
-    _dl_retry "https://ftp.gnu.org/gnu/automake/automake-${AUTOMAKE_VERSION}.tar.gz" "/tmp/automake.tar.gz"; \
+    _dl_retry \
+      "https://ftp.gnu.org/gnu/automake/automake-${AUTOMAKE_VERSION}.tar.gz" \
+      "https://ftpmirror.gnu.org/automake/automake-${AUTOMAKE_VERSION}.tar.gz" \
+      "https://mirrors.kernel.org/gnu/automake/automake-${AUTOMAKE_VERSION}.tar.gz" \
+      "/tmp/automake.tar.gz"; \
     tar -C /tmp -xf /tmp/automake.tar.gz; \
     rm -f /tmp/automake.tar.gz; \
     cd "/tmp/automake-${AUTOMAKE_VERSION}"; \
@@ -142,7 +163,7 @@ RUN set -eux; \
     make install; \
     cd /; \
     rm -rf "/tmp/automake-${AUTOMAKE_VERSION}"; \
-    v="$(automake --version | head -n1 | awk '{print $NF}')"; \
+    v="$(automake --version | head -n1 | awk '{print $NF}')" ; \
     dpkg --compare-versions "$v" ge "1.16.3"; \
     echo "automake version OK: $v"
 
@@ -158,7 +179,7 @@ RUN set -eux; \
     for i in 1 2 3 4 5; do \
       rm -rf libxml2; \
       git clone --filter=blob:none https://gitlab.gnome.org/GNOME/libxml2.git libxml2 && break; \
-      echo "git clone libxml2 failed, retry $i/5"; \
+      echo "git clone libxml2 failed, retry $i/5" >&2; \
       sleep 10; \
     done; \
     test -d libxml2; \
@@ -168,7 +189,7 @@ RUN set -eux; \
     for i in 1 2 3 4 5; do \
       rm -rf libxslt; \
       git clone --filter=blob:none https://gitlab.gnome.org/GNOME/libxslt.git libxslt && break; \
-      echo "git clone libxslt failed, retry $i/5"; \
+      echo "git clone libxslt failed, retry $i/5" >&2; \
       sleep 10; \
     done; \
     test -d libxslt
