@@ -1,16 +1,5 @@
 # Copyright 2020 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License, Version 2.0
 
 ARG parent_image
 
@@ -24,11 +13,12 @@ ARG benchmark
 ARG debug_builder
 
 # -----------------------------
-# Proxy (build-time configurable)
+# 1) Proxy Configuration (build-time overridable)
 # -----------------------------
 ARG HTTP_PROXY=http://172.17.0.1:7890
 ARG HTTPS_PROXY=http://172.17.0.1:7890
 ARG NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
+ARG GIT_SSL_NO_VERIFY=1
 
 ENV FUZZER=$fuzzer \
     BENCHMARK=$benchmark \
@@ -38,12 +28,19 @@ ENV FUZZER=$fuzzer \
     NO_PROXY=${NO_PROXY} \
     http_proxy=${HTTP_PROXY} \
     https_proxy=${HTTPS_PROXY} \
-    no_proxy=${NO_PROXY}
+    no_proxy=${NO_PROXY} \
+    GIT_TERMINAL_PROMPT=0
 
 # -----------------------------
-# APT robustness (retries/timeouts)
+# 2) APT robustness: mirror + retries + timeouts
 # -----------------------------
 RUN set -eux; \
+    if [ -f /etc/apt/sources.list ]; then \
+      sed -i \
+        -e 's|http://archive.ubuntu.com/ubuntu|http://mirrors.aliyun.com/ubuntu|g' \
+        -e 's|http://security.ubuntu.com/ubuntu|http://mirrors.aliyun.com/ubuntu|g' \
+        /etc/apt/sources.list || true; \
+    fi; \
     printf '%s\n' \
       'Acquire::Retries "8";' \
       'Acquire::http::Timeout "60";' \
@@ -52,26 +49,88 @@ RUN set -eux; \
       'Acquire::https::Pipeline-Depth "0";' \
       > /etc/apt/apt.conf.d/80-fuzzbench-retries
 
-# Install dependencies required by Python3 or Pip3 (retry loop to tolerate proxy flakiness)
+# -----------------------------
+# 3) Base deps (NO apt upgrade)
+# -----------------------------
 RUN set -eux; \
-    for i in 1 2 3 4 5 6 7 8; do \
+    for i in 1 2 3 4 5; do \
       apt-get update && \
-      DEBIAN_FRONTEND=noninteractive apt-get upgrade -y && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
+        wget \
+        git \
         xz-utils \
         zlib1g-dev \
         libssl-dev \
         libffi-dev \
       && break; \
-      echo "apt-get failed ($i/8), retrying..."; \
+      echo "apt-get failed ($i/5), retrying..." >&2; \
       sleep 10; \
       apt-get update --fix-missing || true; \
     done; \
     rm -rf /var/lib/apt/lists/*
 
-# Remove old python3.8 artifacts from parent image (ignore if missing)
+# -----------------------------
+# 4) Git robustness (proxy + low speed + optional SSL verify off)
+# -----------------------------
+RUN set -eux; \
+    git config --global http.proxy "${HTTP_PROXY}"; \
+    git config --global https.proxy "${HTTPS_PROXY}"; \
+    git config --global http.lowSpeedLimit 1000; \
+    git config --global http.lowSpeedTime 60; \
+    git config --global http.postBuffer 524288000; \
+    git config --global core.compression 0; \
+    git config --global http.version HTTP/1.1; \
+    if [ "${GIT_SSL_NO_VERIFY}" = "1" ]; then \
+      git config --global http.sslVerify false; \
+    fi
+
+# -----------------------------
+# 5) Helper: robust download (curl first; fallback wget; curl flags are "old-curl safe")
+#    Usage: _dl_retry <url1> [url2] [url3] <out>
+# -----------------------------
+RUN set -eux; \
+    printf '%s\n' \
+'#!/bin/sh' \
+'set -eu' \
+'url1="${1:-}"' \
+'url2="${2:-}"' \
+'url3="${3:-}"' \
+'out="${4:-}"' \
+'[ -n "$url1" ] && [ -n "$out" ] || { echo "usage: _dl_retry <url1> [url2] [url3] <out>" >&2; exit 2; }' \
+'try_one() {' \
+'  url="$1"' \
+'  i=1' \
+'  while [ "$i" -le 8 ]; do' \
+'    rm -f "$out"' \
+'    if command -v curl >/dev/null 2>&1; then' \
+'      if curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 -o "$out" "$url"; then return 0; fi' \
+'      # Some envs need -k; enable only when SSL handshake fails repeatedly by uncommenting next line:' \
+'      # if curl -kfsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 300 -o "$out" "$url"; then return 0; fi' \
+'    fi' \
+'    if command -v wget >/dev/null 2>&1; then' \
+'      if wget -O "$out" --tries=3 --timeout=60 "$url"; then return 0; fi' \
+'      # if wget --no-check-certificate -O "$out" --tries=3 --timeout=60 "$url"; then return 0; fi' \
+'    fi' \
+'    echo "download failed ($i/8): $url" >&2' \
+'    i=$((i+1))' \
+'    sleep 5' \
+'  done' \
+'  return 1' \
+'}' \
+'for url in "$url1" "$url2" "$url3"; do' \
+'  [ -n "$url" ] || continue' \
+'  if try_one "$url"; then exit 0; fi' \
+'done' \
+'echo "download permanently failed (all mirrors): $url1" >&2' \
+'exit 1' \
+      > /usr/local/bin/_dl_retry; \
+    chmod +x /usr/local/bin/_dl_retry
+
+# -----------------------------
+# 6) Remove old python3.8 artifacts from parent image (ignore if missing)
+# -----------------------------
 RUN set -eux; \
     rm -rf \
       /usr/local/bin/python3.8* \
@@ -92,7 +151,6 @@ COPY --from=base-image /usr/local/lib/python3.10/site-packages /usr/local/lib/py
 COPY fuzzers $SRC/fuzzers
 
 # Disable LeakSanitizer since ptrace is unavailable in Google Cloud build
-# and is not needed during build process.
 ENV ASAN_OPTIONS="detect_leaks=0"
 
 COPY benchmarks/$benchmark/benchmark.yaml /
@@ -107,5 +165,6 @@ RUN set -eux; \
 
 COPY docker/benchmark-builder/fuzzer_build /usr/bin/fuzzer_build
 
+# Build target
 RUN echo "Run fuzzer_build to build the target" && \
     if [ -z "$debug_builder" ] ; then fuzzer_build; fi
