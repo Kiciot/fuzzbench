@@ -52,9 +52,6 @@ RUN set -eux; \
 # ==============================
 # 4) Build deps (with retries)
 # ==============================
-# For building binutils from source tarball:
-# - build-essential (gcc/g++/make) + texinfo + flex + bison
-# - curl for robust downloads
 RUN set -eux; \
     for i in 1 2 3 4 5; do \
       apt-get update && \
@@ -78,7 +75,7 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*
 
 # ==============================
-# 5) Helper: download-with-retry (compatible curl flags)
+# 5) Helper: download-with-retry (fail-fast, file must exist)
 # ==============================
 RUN set -eux; \
   printf '%s\n' \
@@ -89,18 +86,27 @@ RUN set -eux; \
 'url3="${3:-}"' \
 'out="${4:-}"' \
 '[ -n "$url1" ] && [ -n "$out" ] || { echo "usage: _dl_retry <url1> [url2] [url3] <out>" >&2; exit 2; }' \
-'for url in "$url1" "$url2" "$url3"; do' \
-'  [ -n "$url" ] || continue' \
+'try_one() {' \
+'  url="$1"' \
 '  i=1' \
 '  while [ "$i" -le 8 ]; do' \
 '    rm -f "$out"' \
 '    if curl -fL --retry 3 --retry-delay 3 --connect-timeout 20 --max-time 600 -o "$out" "$url"; then' \
-'      exit 0' \
+'      if [ -s "$out" ]; then' \
+'        return 0' \
+'      fi' \
 '    fi' \
 '    echo "download failed ($i/8): $url" >&2' \
 '    i=$((i+1))' \
 '    sleep 5' \
 '  done' \
+'  return 1' \
+'}' \
+'for url in "$url1" "$url2" "$url3"; do' \
+'  [ -n "$url" ] || continue' \
+'  if try_one "$url"; then' \
+'    exit 0' \
+'  fi' \
 'done' \
 'echo "download permanently failed (all mirrors): $url1" >&2' \
 'exit 1' \
@@ -110,9 +116,8 @@ RUN set -eux; \
 # ==============================
 # 6) Fetch & build binutils (release tarball; avoid git clone)
 # ==============================
-# You were pinning to binutils-2_26 tag; the matching GNU release is 2.26.
-# Use .tar.gz + correct mirror paths.
 ENV BINUTILS_VER=2.26
+ARG BINUTILS_MAKE_JOBS=4
 
 WORKDIR /tmp
 RUN set -eux; \
@@ -121,12 +126,13 @@ RUN set -eux; \
     "https://ftpmirror.gnu.org/gnu/binutils/binutils-${BINUTILS_VER}.tar.gz" \
     "https://mirrors.kernel.org/gnu/binutils/binutils-${BINUTILS_VER}.tar.gz" \
     "/tmp/binutils.tar.gz"; \
+  test -s /tmp/binutils.tar.gz; \
   tar -xf /tmp/binutils.tar.gz; \
   rm -f /tmp/binutils.tar.gz; \
   mkdir -p "/tmp/binutils-build"; \
   cd "/tmp/binutils-build"; \
   "../binutils-${BINUTILS_VER}/configure" --disable-nls --disable-werror; \
-  make -j"$(nproc)"; \
+  make -j"${BINUTILS_MAKE_JOBS}"; \
   make install; \
   cd /; \
   rm -rf "/tmp/binutils-${BINUTILS_VER}" "/tmp/binutils-build"

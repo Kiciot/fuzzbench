@@ -1,4 +1,4 @@
-#!/bin/bash -eu
+#!/bin/bash -euo pipefail
 # Copyright 2019 Google Inc.
 # Licensed under the Apache License, Version 2.0
 
@@ -10,32 +10,83 @@ export CXXFLAGS="${CXXFLAGS:-} -Wno-error -Wno-deprecated -Wno-unused-variable"
 BINUTILS_VER="2.26"
 WORK="/tmp/binutils_work"
 SRC_TAR="binutils-${BINUTILS_VER}.tar.gz"
-SRC_URL1="https://ftp.gnu.org/gnu/binutils/${SRC_TAR}"
-SRC_URL2="https://mirrors.edge.kernel.org/gnu/binutils/${SRC_TAR}"
+
+# 多镜像（按可用性依次尝试）
+URLS=(
+  "https://ftp.gnu.org/gnu/binutils/${SRC_TAR}"
+  "https://ftpmirror.gnu.org/gnu/binutils/${SRC_TAR}"
+  "https://mirrors.edge.kernel.org/gnu/binutils/${SRC_TAR}"
+  "https://mirrors.kernel.org/gnu/binutils/${SRC_TAR}"
+)
+
+# 构建并发：默认 4，必要时在外部 export BINUTILS_MAKE_JOBS=2/4/8
+BINUTILS_MAKE_JOBS="${BINUTILS_MAKE_JOBS:-4}"
 
 mkdir -p "${WORK}"
 cd "${WORK}"
 
-download() {
-  local url="$1"
-  if command -v curl >/dev/null 2>&1; then
-    curl -fL --retry 8 --retry-connrefused --retry-delay 3 --connect-timeout 20 --max-time 600 -o "${SRC_TAR}" "${url}"
-    return 0
-  fi
-  if command -v wget >/dev/null 2>&1; then
-    wget -O "${SRC_TAR}" --tries=8 --timeout=60 "${url}"
-    return 0
-  fi
+need_tool() {
+  command -v curl >/dev/null 2>&1 && return 0
+  command -v wget >/dev/null 2>&1 && return 0
   echo "need curl or wget" >&2
   exit 2
 }
 
-if [ ! -f "${SRC_TAR}" ]; then
-  ( download "${SRC_URL1}" ) || ( rm -f "${SRC_TAR}" && download "${SRC_URL2}" )
+# 强健下载：成功条件=命令成功 + 文件存在且非空
+download_one() {
+  local url="$1"
+  rm -f "${SRC_TAR}"
+
+  if command -v curl >/dev/null 2>&1; then
+    # -f: HTTP 错误码直接失败
+    # --retry-connrefused: 连接被拒绝也重试
+    # --max-time: 总时长上限（避免卡死）
+    curl -fL \
+      --retry 8 --retry-connrefused --retry-delay 3 \
+      --connect-timeout 20 --max-time 600 \
+      -o "${SRC_TAR}" "${url}" || return 1
+  else
+    wget -O "${SRC_TAR}" --tries=8 --timeout=60 "${url}" || return 1
+  fi
+
+  test -s "${SRC_TAR}" || return 1
+  return 0
+}
+
+download_with_fallback() {
+  local ok=1
+  for url in "${URLS[@]}"; do
+    for i in 1 2 3 4 5 6 7 8; do
+      echo "[+] downloading ${SRC_TAR} from ${url} (try ${i}/8)"
+      if download_one "${url}"; then
+        echo "[+] download ok: ${WORK}/${SRC_TAR}"
+        ok=0
+        break
+      fi
+      echo "[-] download failed: ${url} (try ${i}/8)" >&2
+      sleep 5
+    done
+    [ "${ok}" -eq 0 ] && break
+  done
+  return "${ok}"
+}
+
+need_tool
+
+if [ ! -s "${SRC_TAR}" ]; then
+  if ! download_with_fallback; then
+    echo "[-] download permanently failed for ${SRC_TAR}" >&2
+    exit 1
+  fi
+else
+  echo "[+] using cached tarball: ${WORK}/${SRC_TAR}"
 fi
 
 rm -rf "${WORK}/src" "${WORK}/build"
 mkdir -p "${WORK}/src" "${WORK}/build"
+
+# 解包前再确认一次文件非空（避免 tar: cannot open）
+test -s "${SRC_TAR}"
 tar -xf "${SRC_TAR}" -C "${WORK}/src" --strip-components=1
 
 # out-of-tree build：configure 要从源码目录调用
@@ -48,7 +99,8 @@ cd "${WORK}/build"
   --disable-sim \
   --disable-werror
 
-make -j"$(nproc)"
+# 不要用 nproc 拉满（会触发资源峰值/抖动）
+make -j"${BINUTILS_MAKE_JOBS}"
 
 # nm-new 一般会在 build/binutils/ 里
 cp -f "${WORK}/build/binutils/nm-new" "${OUT}/nm-new"
@@ -69,7 +121,6 @@ done < <(find "${WORK}/build" -name '*.o' -type f -print) || true
 if command -v zip >/dev/null 2>&1; then
   zip -j "${OUT}/nm-new_seed_corpus.zip" "${SEED_DIR}"/* >/dev/null 2>&1 || true
 else
-  # 没有 zip 就打包成 tar.gz（不会影响你本地调试，但 FuzzBench 可能更偏好 zip）
   tar -czf "${OUT}/nm-new_seed_corpus.tar.gz" -C "${SEED_DIR}" . || true
 fi
 
