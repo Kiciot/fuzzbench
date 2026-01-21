@@ -97,7 +97,7 @@ RUN set -eux; \
 '  i=1' \
 '  while [ "$i" -le 8 ]; do' \
 '    rm -f "$out"' \
-'    if curl -fL --retry 3 --retry-all-errors --connect-timeout 15 --max-time 300 -o "$out" "$url"; then' \
+'    if curl -fL --retry 3 --connect-timeout 15 --max-time 300 -o "$out" "$url"; then' \
 '      exit 0' \
 '    fi' \
 '    echo "download failed ($i/8): $url" >&2' \
