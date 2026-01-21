@@ -1,42 +1,76 @@
 #!/bin/bash -eu
 # Copyright 2019 Google Inc.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-################################################################################
+# Licensed under the Apache License, Version 2.0
 
-# 显式使用 C 编译器 (AFL++ 等会自动设置 CC/CXX)
-# binutils 2.26 较老，不仅要关掉 Werror，还要处理一些老旧代码的兼容性
-export CFLAGS="$CFLAGS -Wno-error -Wno-deprecated -Wno-unused-variable"
-export CXXFLAGS="$CXXFLAGS -Wno-error -Wno-deprecated -Wno-unused-variable"
+# FuzzBench 会设置 OUT / CC / CXX / CFLAGS / CXXFLAGS 等
+# 我们只做最小增补，避免老代码的 -Werror 把编译卡死
+export CFLAGS="${CFLAGS:-} -Wno-error -Wno-deprecated -Wno-unused-variable"
+export CXXFLAGS="${CXXFLAGS:-} -Wno-error -Wno-deprecated -Wno-unused-variable"
 
-# 1. 配置
-# --disable-shared: 静态链接，方便 Fuzzing
-# --disable-gdb: 我们只需要 binutils 工具，不需要 gdb
-# --disable-libdecnumber, --disable-readline, --disable-sim: 禁用不必要的组件加速编译
-./configure --disable-shared --disable-gdb --disable-libdecnumber --disable-readline --disable-sim --disable-werror
+BINUTILS_VER="2.26"
+WORK="/tmp/binutils_work"
+SRC_TAR="binutils-${BINUTILS_VER}.tar.gz"
+SRC_URL1="https://ftp.gnu.org/gnu/binutils/${SRC_TAR}"
+SRC_URL2="https://mirrors.edge.kernel.org/gnu/binutils/${SRC_TAR}"
 
-# 2. 编译
-make -j$(nproc)
+mkdir -p "${WORK}"
+cd "${WORK}"
 
-# 3. 复制目标文件
-# Binutils 编译好的文件通常在 binutils/ 目录下
-# 我们将其重命名为 nm-new 以符合 benchmark 名字
-cp -f "$BUILD_DIR/binutils/nm-new" "$OUT/nm-new"
+download() {
+  local url="$1"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fL --retry 8 --retry-connrefused --retry-delay 3 --connect-timeout 20 --max-time 600 -o "${SRC_TAR}" "${url}"
+    return 0
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    wget -O "${SRC_TAR}" --tries=8 --timeout=60 "${url}"
+    return 0
+  fi
+  echo "need curl or wget" >&2
+  exit 2
+}
 
-# 4. 生成种子
-# 我们使用 binutils 源码中的一些对象文件作为种子
-mkdir -p $OUT/seeds
-find . -name "*.o" | head -n 100 | xargs -I {} cp {} $OUT/seeds/
-zip -j $OUT/nm-new_seed_corpus.zip $OUT/seeds/*
-rm -rf $OUT/seeds
+if [ ! -f "${SRC_TAR}" ]; then
+  ( download "${SRC_URL1}" ) || ( rm -f "${SRC_TAR}" && download "${SRC_URL2}" )
+fi
+
+rm -rf "${WORK}/src" "${WORK}/build"
+mkdir -p "${WORK}/src" "${WORK}/build"
+tar -xf "${SRC_TAR}" -C "${WORK}/src" --strip-components=1
+
+# out-of-tree build：configure 要从源码目录调用
+cd "${WORK}/build"
+"${WORK}/src/configure" \
+  --disable-shared \
+  --disable-gdb \
+  --disable-libdecnumber \
+  --disable-readline \
+  --disable-sim \
+  --disable-werror
+
+make -j"$(nproc)"
+
+# nm-new 一般会在 build/binutils/ 里
+cp -f "${WORK}/build/binutils/nm-new" "${OUT}/nm-new"
+
+# ---- seeds ----
+SEED_DIR="${OUT}/seeds"
+mkdir -p "${SEED_DIR}"
+
+# 避免 find|head 触发 SIGPIPE(141)：用计数 + break，并吞掉 SIGPIPE
+n=0
+while IFS= read -r f; do
+  cp -f "$f" "${SEED_DIR}/" || true
+  n=$((n+1))
+  [ "$n" -ge 100 ] && break
+done < <(find "${WORK}/build" -name '*.o' -type f -print) || true
+
+# zip 可能不存在；FuzzBench 的基础镜像一般有 zip，但这里做个兜底
+if command -v zip >/dev/null 2>&1; then
+  zip -j "${OUT}/nm-new_seed_corpus.zip" "${SEED_DIR}"/* >/dev/null 2>&1 || true
+else
+  # 没有 zip 就打包成 tar.gz（不会影响你本地调试，但 FuzzBench 可能更偏好 zip）
+  tar -czf "${OUT}/nm-new_seed_corpus.tar.gz" -C "${SEED_DIR}" . || true
+fi
+
+rm -rf "${SEED_DIR}"

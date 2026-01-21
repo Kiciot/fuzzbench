@@ -1,12 +1,5 @@
-# Copyright 2019 Google Inc.
-# Licensed under the Apache License, Version 2.0
-################################################################################
-
 FROM gcr.io/oss-fuzz-base/base-builder@sha256:87ca1e9e19235e731fac8de8d1892ebe8d55caf18e7aa131346fc582a2034fdd
 
-# -----------------------------
-# Proxy (build-time configurable)
-# -----------------------------
 ARG HTTP_PROXY=http://172.17.0.1:7890
 ARG HTTPS_PROXY=http://172.17.0.1:7890
 ARG NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
@@ -18,9 +11,6 @@ ENV HTTP_PROXY=${HTTP_PROXY} \
     https_proxy=${HTTPS_PROXY} \
     no_proxy=${NO_PROXY}
 
-# -----------------------------
-# APT stability: retries/timeouts
-# -----------------------------
 RUN set -eux; \
   printf '%s\n' \
     'Acquire::Retries "8";' \
@@ -30,9 +20,6 @@ RUN set -eux; \
     'Acquire::https::Pipeline-Depth "0";' \
     > /etc/apt/apt.conf.d/80-fuzzbench-retries
 
-# -----------------------------
-# Base deps
-# -----------------------------
 RUN set -eux; \
   for i in 1 2 3 4 5; do \
     apt-get update && \
@@ -48,6 +35,7 @@ RUN set -eux; \
       bison \
       flex \
       file \
+      zip \
     && break; \
     echo "apt-get failed, retry $i/5"; \
     sleep 10; \
@@ -55,11 +43,6 @@ RUN set -eux; \
   done; \
   rm -rf /var/lib/apt/lists/*
 
-# -----------------------------
-# Helper: download-with-retry (compatible curl flags)
-# - Avoids curl options that are missing on older distros.
-# - Supports up to 3 mirror URLs.
-# -----------------------------
 RUN set -eux; \
   printf '%s\n' \
 '#!/bin/sh' \
@@ -74,9 +57,7 @@ RUN set -eux; \
 '  i=1' \
 '  while [ "$i" -le 8 ]; do' \
 '    rm -f "$out"' \
-'    if curl -fL --retry 3 --retry-delay 3 --connect-timeout 20 --max-time 600 -o "$out" "$url"; then' \
-'      exit 0' \
-'    fi' \
+'    if curl -fL --retry 3 --retry-delay 3 --connect-timeout 20 --max-time 600 -o "$out" "$url"; then exit 0; fi' \
 '    echo "download failed ($i/8): $url" >&2' \
 '    i=$((i+1))' \
 '    sleep 5' \
@@ -87,15 +68,9 @@ RUN set -eux; \
   > /usr/local/bin/_dl_retry; \
   chmod +x /usr/local/bin/_dl_retry
 
-# -----------------------------
-# Fetch & build binutils (release tarball, avoid git clone)
-# Notes:
-# - Fixes incorrect mirror path: ftpmirror needs /gnu/ prefix.
-# - Prefer .tar.gz: more widely available across mirrors than .tar.xz.
-# - Uses 3 sources: GNU, ftpmirror, kernel.org.
-# -----------------------------
 ENV BINUTILS_VER=2.28
 
+# 关键：把源码放到 $SRC（/src）下，供 build.sh 用插桩编译
 WORKDIR /tmp
 RUN set -eux; \
   _dl_retry \
@@ -103,16 +78,9 @@ RUN set -eux; \
     "https://ftpmirror.gnu.org/gnu/binutils/binutils-${BINUTILS_VER}.tar.gz" \
     "https://mirrors.kernel.org/gnu/binutils/binutils-${BINUTILS_VER}.tar.gz" \
     "/tmp/binutils.tar.gz"; \
-  tar -xf /tmp/binutils.tar.gz; \
-  rm -f /tmp/binutils.tar.gz; \
-  mkdir -p "/tmp/binutils-build"; \
-  cd "/tmp/binutils-build"; \
-  "../binutils-${BINUTILS_VER}/configure" --disable-nls --disable-werror; \
-  make -j"$(nproc)"; \
-  make install; \
-  cd /; \
-  rm -rf "/tmp/binutils-${BINUTILS_VER}" "/tmp/binutils-build"
+  mkdir -p "${SRC}"; \
+  tar -xf /tmp/binutils.tar.gz -C "${SRC}"; \
+  rm -f /tmp/binutils.tar.gz
 
-# FuzzBench build.sh will compile the fuzzer target using installed objdump.
 WORKDIR $SRC
 COPY build.sh $SRC/

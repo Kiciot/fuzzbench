@@ -71,16 +71,16 @@ SEED_DIR="$OUT/seeds"
 rm -rf "$SEED_DIR"
 mkdir -p "$SEED_DIR"
 
-# 用 .o 文件做种子（你原逻辑保留），并避免 xargs 空输入导致失败
+# 避免 pipefail + head 导致 find SIGPIPE=141
+set +o pipefail
 find "$BUILD_DIR" -name "*.o" -print | head -n 100 | while read -r f; do
   cp -f "$f" "$SEED_DIR/" || true
 done
+set -o pipefail
 
-# 允许 seeds 为空时 zip 不致命
 if ls -1 "$SEED_DIR"/* >/dev/null 2>&1; then
   zip -j "$OUT/objdump_seed_corpus.zip" "$SEED_DIR"/* >/dev/null
 else
-  # 至少生成一个空 zip，避免下游依赖文件存在
   (cd "$SEED_DIR" && zip -j "$OUT/objdump_seed_corpus.zip" . >/dev/null) || true
 fi
 
