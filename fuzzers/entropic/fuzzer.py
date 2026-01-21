@@ -2,22 +2,20 @@ from fuzzers import utils
 import os
 
 def build():
-    """Build benchmark."""
-    # 获取我们在 Dockerfile 中生成的静态库路径
-    entropic_lib = os.environ.get('ENTROPIC_LIB', '/libEntropic.a')
+    entropic_engine = os.environ.get("ENTROPIC_ENGINE", "/libEntropicEngine.a")
 
-    # 这里的 cflags 和 cxxflags 是关键：
-    # 1. -fsanitize=fuzzer-no-link: 告诉 clang 进行覆盖率插桩，但不要链接系统自带的 libFuzzer
-    # 2. -fsanitize=address: 通常配合 ASAN 使用
-    cflags = ['-fsanitize=fuzzer-no-link', '-fsanitize=address']
-    
-    # 链接我们手动编译的 Entropic 库
-    # 注意：某些 benchmark 需要 -lstdc++，libFuzzer 通常是用 C++ 写
-    cxxflags = cflags + [entropic_lib, '-lstdc++']
+    # 编译期：插桩但不链接系统 libFuzzer
+    cflags = ["-fsanitize=fuzzer-no-link", "-fsanitize=address"]
+    cxxflags = ["-fsanitize=fuzzer-no-link", "-fsanitize=address"]
+
+    # 关键：链接期引擎
+    os.environ["LIB_FUZZING_ENGINE"] = entropic_engine
 
     utils.build_benchmark(
-        fuzzer_name_or_path='entropic',
-        sanitizers=['address'], # FuzzBench 会自动处理 sanitizer，但我们需要自定义 flag 覆盖
+        # 这里的 fuzzer_name_or_path 仍然写 entropic（只要你在 fuzzers/entropic 目录下）
+        # 或者你也可以写一个已存在的名字，但不建议混用。
+        fuzzer_name_or_path="entropic",
+        sanitizers=["address"],
         extra_cflags=cflags,
-        extra_cxxflags=cxxflags
+        extra_cxxflags=cxxflags,
     )
