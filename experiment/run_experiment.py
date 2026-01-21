@@ -479,7 +479,9 @@ class LocalDispatcher(BaseDispatcher):
 
     def start(self):
         """Start the experiment on the dispatcher."""
-        container_name = 'dispatcher-container'
+        instance = os.environ.get('INSTANCE_NAME') or os.environ.get('EXPERIMENT') or 'local'
+        instance = re.sub(r'[^A-Za-z0-9_.-]+', '-', instance).strip('-')[:120] or 'local'
+        container_name = f'dispatcher-{instance}-{os.getpid()}'
         experiment_filestore_path = os.path.abspath(
             self.config['experiment_filestore'])
         filesystem.create_directory(experiment_filestore_path)
