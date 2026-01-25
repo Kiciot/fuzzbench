@@ -36,6 +36,7 @@ RUN set -eux; \
       flex \
       file \
       zip \
+      binutils \
     && break; \
     echo "apt-get failed, retry $i/5"; \
     sleep 10; \
@@ -70,7 +71,7 @@ RUN set -eux; \
 
 ENV BINUTILS_VER=2.28
 
-# 关键：把源码放到 $SRC（/src）下，供 build.sh 用插桩编译
+# Put the extracted source at ${SRC}/binutils so build.sh can reuse it without re-downloading.
 WORKDIR /tmp
 RUN set -eux; \
   _dl_retry \
@@ -80,7 +81,10 @@ RUN set -eux; \
     "/tmp/binutils.tar.gz"; \
   mkdir -p "${SRC}"; \
   tar -xf /tmp/binutils.tar.gz -C "${SRC}"; \
-  rm -f /tmp/binutils.tar.gz
+  rm -f /tmp/binutils.tar.gz; \
+  rm -rf "${SRC}/binutils"; \
+  mv "${SRC}/binutils-${BINUTILS_VER}" "${SRC}/binutils"
 
-WORKDIR $SRC
-COPY build.sh $SRC/
+WORKDIR ${SRC}
+COPY build.sh ${SRC}/build.sh
+RUN chmod +x ${SRC}/build.sh
