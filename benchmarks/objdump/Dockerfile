@@ -20,6 +20,7 @@ RUN set -eux; \
     'Acquire::https::Pipeline-Depth "0";' \
     > /etc/apt/apt.conf.d/80-fuzzbench-retries
 
+# deps (加了 ripgrep + AFL++ build deps)
 RUN set -eux; \
   for i in 1 2 3 4 5; do \
     apt-get update && \
@@ -31,12 +32,21 @@ RUN set -eux; \
       make \
       gcc \
       g++ \
+      clang \
+      llvm \
+      lld \
+      cmake \
+      ninja-build \
+      git \
+      python3 \
+      python3-pip \
       texinfo \
       bison \
       flex \
       file \
       zip \
       binutils \
+      ripgrep \
     && break; \
     echo "apt-get failed, retry $i/5"; \
     sleep 10; \
@@ -44,6 +54,18 @@ RUN set -eux; \
   done; \
   rm -rf /var/lib/apt/lists/*
 
+# Build & install AFL++ (稳定：从官方仓库装 wrappers)
+# 你如果想锁定版本，把 stable 换成具体 tag/commit
+RUN set -eux; \
+  git clone --depth 1 --branch stable https://github.com/AFLplusplus/AFLplusplus.git /tmp/AFLplusplus; \
+  make -C /tmp/AFLplusplus distrib -j"$(nproc)"; \
+  make -C /tmp/AFLplusplus install; \
+  rm -rf /tmp/AFLplusplus; \
+  command -v afl-clang-fast; \
+  command -v afl-clang-fast++; \
+  afl-clang-fast --version || true
+
+# 你的原逻辑保持不变
 RUN set -eux; \
   printf '%s\n' \
 '#!/bin/sh' \
@@ -71,7 +93,6 @@ RUN set -eux; \
 
 ENV BINUTILS_VER=2.28
 
-# Put the extracted source at ${SRC}/binutils so build.sh can reuse it without re-downloading.
 WORKDIR /tmp
 RUN set -eux; \
   _dl_retry \

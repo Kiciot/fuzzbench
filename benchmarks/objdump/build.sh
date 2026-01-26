@@ -12,6 +12,13 @@ OUT="${OUT:?OUT is not set}"
 CFLAGS="${CFLAGS:-}"
 CXXFLAGS="${CXXFLAGS:-}"
 
+# If AFL++ wrappers exist in the image, force them.
+# This is required because the sanity check below expects AFL markers.
+if command -v afl-clang-fast >/dev/null 2>&1 && command -v afl-clang-fast++ >/dev/null 2>&1; then
+  export CC=afl-clang-fast
+  export CXX=afl-clang-fast++
+fi
+
 # Relax some warnings (older code + newer compilers)
 export CFLAGS="${CFLAGS} -Wno-error -Wno-deprecated -Wno-unused-variable"
 export CXXFLAGS="${CXXFLAGS} -Wno-error -Wno-deprecated -Wno-unused-variable"
@@ -21,6 +28,8 @@ export CXXFLAGS="${CXXFLAGS} -Wno-error -Wno-deprecated -Wno-unused-variable"
 export CC_FOR_BUILD="$CC"
 export CXX_FOR_BUILD="$CXX"
 export HOSTCC="$CC"
+export BUILD_CC="$CC"
+export BUILD_CXX="$CXX"
 
 # ---- helper: download ----
 dl() {
@@ -59,8 +68,10 @@ mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
 # Explicitly pass toolchain variables so configure/make don't accidentally fall back.
+# Also propagate common tool vars to reduce surprises.
 CC="$CC" CXX="$CXX" \
 CFLAGS="$CFLAGS" CXXFLAGS="$CXXFLAGS" \
+AR="${AR:-ar}" RANLIB="${RANLIB:-ranlib}" NM="${NM:-nm}" STRIP="${STRIP:-strip}" \
 "$SRC_DIR/configure" \
   --disable-shared \
   --disable-gdb \
@@ -70,7 +81,10 @@ CFLAGS="$CFLAGS" CXXFLAGS="$CXXFLAGS" \
   --disable-werror \
   --disable-nls
 
-make -j"$(nproc)" CC="$CC" CXX="$CXX"
+make -j"$(nproc)" \
+  CC="$CC" CXX="$CXX" \
+  CFLAGS="$CFLAGS" CXXFLAGS="$CXXFLAGS" \
+  AR="${AR:-ar}" RANLIB="${RANLIB:-ranlib}"
 
 # ---- install target binary into OUT ----
 mkdir -p "$OUT"
@@ -82,6 +96,7 @@ if command -v strings >/dev/null 2>&1; then
   if ! strings "$OUT/objdump" | grep -Eq "__afl|AFL_"; then
     echo "ERROR: $OUT/objdump appears to be non-instrumented (no AFL markers found)." >&2
     echo "Check that CC/CXX are set to AFL compiler wrappers and that build did not fall back to system gcc/clang." >&2
+    echo "CC=$CC CXX=$CXX" >&2
     exit 1
   fi
 fi
