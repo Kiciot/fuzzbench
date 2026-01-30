@@ -571,7 +571,9 @@ class SnapshotMeasurer(coverage_utils.TrialCoverage):  # pylint: disable=too-man
                               self.benchmark_fuzzer_trial_dir /
                               'crashes' /
                               crashes_archive_name)
-        archive_filestore_path = exp_path.filestore(logical_crash_path)
+        
+        # [FIX] Force conversion to str to prevent TypeError on some fs backends
+        archive_filestore_path = exp_path.filestore(str(logical_crash_path))
         
         filestore_utils.cp(archive_path, archive_filestore_path)
         os.remove(archive_path)
@@ -612,7 +614,8 @@ class SnapshotMeasurer(coverage_utils.TrialCoverage):  # pylint: disable=too-man
         logical_stats_path = (pathlib.Path(experiment_utils.get_experiment_folders_dir()) /
                               self.benchmark_fuzzer_trial_dir /
                               stats_filename)
-        stats_filestore_path = exp_path.filestore(logical_stats_path)
+        # [FIX] Ensure str
+        stats_filestore_path = exp_path.filestore(str(logical_stats_path))
         
         try:
             return get_fuzzer_stats(stats_filestore_path)
@@ -660,6 +663,15 @@ def measure_trial_coverage(measure_req, max_cycle: int,
                              'trial_id': str(measure_req.trial_id),
                              'cycle': str(cycle),
                          })
+            # [CRITICAL FIX] If measurement fails (e.g. path error), send a RetryRequest
+            # so the manager knows to remove this task from queued_snapshots.
+            # Otherwise it hangs forever (Deadlock).
+            multiprocessing_queue.put(
+                measurer_datatypes.RetryRequest(
+                    measure_req.fuzzer, measure_req.benchmark, measure_req.trial_id, cycle, fail_count=1
+                )
+            )
+
     logger.debug('Done measuring trial: %d.', measure_req.trial_id)
 
 
@@ -703,7 +715,8 @@ def measure_snapshot_coverage(  # pylint: disable=too-many-locals
                   archive_name
     
     # Map the logical source to the actual filestore location
-    candidate_src = exp_path.filestore(logical_src)
+    # [FIX] Ensure str() for Path objects
+    candidate_src = exp_path.filestore(str(logical_src))
 
     candidate_dir = os.path.dirname(candidate_dst)
     if not os.path.exists(candidate_dir):
@@ -756,7 +769,9 @@ def measure_snapshot_coverage(  # pylint: disable=too-many-locals
                         snapshot_measurer.benchmark_fuzzer_trial_dir /
                         'coverage' /
                         coverage_archive_name)
-    coverage_archive_dst = exp_path.filestore(logical_cov_path)
+    
+    # [FIX] Ensure str() for Path objects
+    coverage_archive_dst = exp_path.filestore(str(logical_cov_path))
 
     if filestore_utils.cp(coverage_archive_zipped,
                           coverage_archive_dst,
