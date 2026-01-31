@@ -553,7 +553,27 @@ class SnapshotMeasurer(coverage_utils.TrialCoverage):  # pylint: disable=too-man
             self.logger.warning('Corpus not found: %s.', corpus_archive_path)
             return False
 
+        # 1. 先解压
         extract_corpus(corpus_archive_path, self.corpus_dir)
+        
+        # 2. [关键修复] 检查是否被套了一层 'default/queue'
+        # 如果解压后 self.corpus_dir 下面只有 'default' 文件夹，说明结构错了
+        # 我们需要把 default/queue 下的所有文件移动到 self.corpus_dir 根目录
+        
+        default_dir = os.path.join(self.corpus_dir, 'default')
+        queue_dir = os.path.join(default_dir, 'queue')
+        
+        if os.path.isdir(queue_dir):
+            self.logger.info('Flattening AFL++ default/queue directory structure...')
+            # 移动 queue 里的文件出来
+            for filename in os.listdir(queue_dir):
+                src = os.path.join(queue_dir, filename)
+                dst = os.path.join(self.corpus_dir, filename)
+                if not os.path.exists(dst):
+                    os.rename(src, dst)
+            # 清理空目录 (可选)
+            # shutil.rmtree(default_dir) 
+            
         return True
 
     def save_crash_files(self, cycle):
@@ -610,18 +630,44 @@ class SnapshotMeasurer(coverage_utils.TrialCoverage):  # pylint: disable=too-man
         """Get the fuzzer stats for |cycle|."""
         stats_filename = experiment_utils.get_stats_filename(cycle)
         
-        # [STANDARDIZED] Use logical helper for stats reading
-        logical_stats_path = (pathlib.Path(experiment_utils.get_experiment_folders_dir()) /
-                              self.benchmark_fuzzer_trial_dir /
-                              stats_filename)
-        # [FIX] Ensure str
-        stats_filestore_path = exp_path.filestore(str(logical_stats_path))
-        
-        try:
-            return get_fuzzer_stats(stats_filestore_path)
-        except (ValueError, json.decoder.JSONDecodeError):
-            logger.error('Stats are invalid.')
-            return None
+        # 基础路径：experiment-folders/<benchmark-fuzzer>/trial-X/
+        base_trial_path = pathlib.Path(experiment_utils.get_experiment_folders_dir()) / \
+                          self.benchmark_fuzzer_trial_dir
+
+        # [FIX] 路径探测列表：
+        # FuzzBench 默认去 trial 根目录找，但 AFL++ 有时会把它藏在 corpus/default 里
+        # 这里的路径是逻辑路径，之后会被 exp_path.filestore 映射
+        candidates = [
+            # 1. 标准位置: trial-X/fuzzer_stats
+            base_trial_path / stats_filename,
+            
+            # 2. AFL++ 新版位置: trial-X/corpus/default/fuzzer_stats
+            # (注意：这是你刚才在 runner 里 find 到的实际路径结构)
+            base_trial_path / 'corpus-archives' / 'default' / stats_filename,
+            
+            # 3. 备用位置: trial-X/default/fuzzer_stats
+            base_trial_path / 'default' / stats_filename
+        ]
+
+        # 遍历所有可能的路径
+        for logical_path in candidates:
+            # 强制转为 str，防止 filestore 报错
+            stats_filestore_path = exp_path.filestore(str(logical_path))
+            
+            try:
+                # 尝试读取并验证
+                stats = get_fuzzer_stats(stats_filestore_path)
+                if stats:
+                    # 如果成功读到，记录一下日志（可选）并返回
+                    # self.logger.debug(f'Found stats at: {logical_path}')
+                    return stats
+            except Exception:
+                # 如果这个路径没有文件，就默默尝试下一个
+                continue
+
+        # 如果试了一圈都没找到，这时候再报错
+        self.logger.error('Stats not found in any candidate paths.')
+        return None
 
 
 def get_fuzzer_stats(stats_filestore_path):
