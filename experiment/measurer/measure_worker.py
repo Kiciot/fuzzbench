@@ -13,6 +13,7 @@
 # limitations under the License.
 """Module for measurer workers logic."""
 import time
+import traceback
 from typing import Dict, Optional
 from common import logs
 from database.models import Snapshot
@@ -52,15 +53,46 @@ class BaseMeasureWorker:
         while True:
             # 'SnapshotMeasureRequest', ['fuzzer', 'benchmark', 'trial_id',
             # 'cycle']
-            request = self.get_task_from_request_queue()
+            try:
+                request = self.get_task_from_request_queue()
+            except Exception: # pylint: disable=broad-except
+                # 如果连取任务都失败了，记录日志并重试
+                logger.error('Worker failed to get task: %s', traceback.format_exc())
+                time.sleep(MEASUREMENT_TIMEOUT)
+                continue
+
             logger.info(
                 'Measurer worker: Got request %s %s %d %d from request queue',
                 request.fuzzer, request.benchmark, request.trial_id,
                 request.cycle)
-            measured_snapshot = measure_manager.measure_snapshot_coverage(
-                request.fuzzer, request.benchmark, request.trial_id,
-                request.cycle, self.region_coverage)
-            self.put_result_in_response_queue(measured_snapshot, request)
+            
+            # [CRITICAL FIX] 加上全包裹的 try-except
+            try:
+                measured_snapshot = measure_manager.measure_snapshot_coverage(
+                    request.fuzzer, request.benchmark, request.trial_id,
+                    request.cycle, self.region_coverage)
+                
+                # 正常情况：提交结果
+                self.put_result_in_response_queue(measured_snapshot, request)
+
+            except Exception:  # pylint: disable=broad-except
+                # 异常情况：记录堆栈，并发送 RetryRequest 解除 Manager 死锁
+                error_msg = traceback.format_exc()
+                logger.error('Worker crashed during measurement: %s', error_msg)
+                
+                # 构造一个 RetryRequest 通知 Manager 这个任务失败了
+                # 这样 Manager 就会把它从 pending 列表中移除，避免死锁
+                retry_request = measurer_datatypes.RetryRequest(
+                    request.fuzzer, request.benchmark, request.trial_id,
+                    request.cycle, fail_count=1
+                )
+                
+                # 尝试把失败消息发回去，如果发不回去也没办法了
+                try:
+                    self.response_queue.put(retry_request)
+                except Exception:
+                    logger.error('Worker failed to send retry request.')
+
             time.sleep(MEASUREMENT_TIMEOUT)
 
 

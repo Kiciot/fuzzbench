@@ -87,7 +87,9 @@ def _corpus_archive_exists(fuzzer: str, benchmark: str, trial_id: int, cycle: in
     
     # Logical path: experiment-folders/.../corpus-archives/corpus-archive-XXXX.tar.gz
     logical_path = trial_path / 'corpus-archives' / archive_name
-    mapped_path = exp_path.filestore(logical_path)
+    
+    # [FIX] 必须强制转换为 str！否则 Path 对象传给 filestore 会导致路径拼接错误
+    mapped_path = exp_path.filestore(str(logical_path))
 
     if os.getenv('DEBUG_PATHS') == '1':
         logger.info('[DEBUG_PATHS] Checking existence: %s', mapped_path)
@@ -99,7 +101,7 @@ def _find_first_available_corpus_cycle(fuzzer: str, benchmark: str, trial_id: in
     """Scans the trial's corpus directory to find the earliest available cycle."""
     trial_path = _get_logical_trial_path(fuzzer, benchmark, trial_id)
     logical_dir = trial_path / 'corpus-archives'
-    mapped_dir = exp_path.filestore(logical_dir)
+    mapped_dir = exp_path.filestore(str(logical_dir))
 
     # If the directory itself doesn't exist (or ls fails), return None
     if filestore_utils.ls(mapped_dir, must_exist=False).retcode != 0:
@@ -280,7 +282,7 @@ def measure_all_trials(experiment: str, max_total_time: int, pool,
 
 def _time_to_cycle(time_in_seconds: float) -> int:
     """Converts |time_in_seconds| to the corresponding cycle and returns it."""
-    return time_in_seconds // experiment_utils.get_snapshot_seconds()
+    return int(time_in_seconds // experiment_utils.get_snapshot_seconds())
 
 
 def _query_ids_of_measured_trials(experiment: str):
