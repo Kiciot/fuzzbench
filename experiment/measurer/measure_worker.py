@@ -1,16 +1,5 @@
 # Copyright 2024 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# ... (License header) ...
 """Module for measurer workers logic."""
 import time
 import traceback
@@ -25,8 +14,7 @@ logger = logs.Logger()  # pylint: disable=invalid-name
 
 
 class BaseMeasureWorker:
-    """Base class for measure worker. Encapsulates core methods that will be
-    implemented for Local and Google Cloud measure workers."""
+    """Base class for measure worker."""
 
     def __init__(self, config: Dict):
         self.request_queue = config['request_queue']
@@ -34,12 +22,9 @@ class BaseMeasureWorker:
         self.region_coverage = config['region_coverage']
 
     def get_task_from_request_queue(self):
-        """"Get task from request queue"""
         raise NotImplementedError
 
     def put_result_in_response_queue(self, measured_snapshot, request):
-        """Save measurement result in response queue, for the measure manager to
-        retrieve"""
         raise NotImplementedError
 
     def measure_worker_loop(self):
@@ -51,48 +36,42 @@ class BaseMeasureWorker:
         })
         logger.info('Starting one measure worker loop')
         while True:
-            # 'SnapshotMeasureRequest', ['fuzzer', 'benchmark', 'trial_id',
-            # 'cycle']
             try:
-                request = self.get_task_from_request_queue()
-            except Exception: # pylint: disable=broad-except
-                # 如果连取任务都失败了，记录日志并重试
-                logger.error('Worker failed to get task: %s', traceback.format_exc())
-                time.sleep(MEASUREMENT_TIMEOUT)
-                continue
+                # 1. 获取任务 (包裹 try-except 以防队列本身报错)
+                try:
+                    request = self.get_task_from_request_queue()
+                except Exception:
+                    logger.error('Worker failed to get task: %s', traceback.format_exc())
+                    time.sleep(MEASUREMENT_TIMEOUT)
+                    continue
 
-            logger.info(
-                'Measurer worker: Got request %s %s %d %d from request queue',
-                request.fuzzer, request.benchmark, request.trial_id,
-                request.cycle)
-            
-            # [CRITICAL FIX] 加上全包裹的 try-except
-            try:
-                measured_snapshot = measure_manager.measure_snapshot_coverage(
+                logger.info(
+                    'Measurer worker: Got request %s %s %d %d from request queue',
                     request.fuzzer, request.benchmark, request.trial_id,
-                    request.cycle, self.region_coverage)
+                    request.cycle)
                 
-                # 正常情况：提交结果
+                # 2. 执行测量
+                measured_snapshot = None
+                try:
+                    measured_snapshot = measure_manager.measure_snapshot_coverage(
+                        request.fuzzer, request.benchmark, request.trial_id,
+                        request.cycle, self.region_coverage)
+                except Exception:
+                    # [CRITICAL FIX] 捕获所有测量过程中的崩溃
+                    logger.error('Worker CRASHED measuring cycle %d: %s', 
+                                 request.cycle, traceback.format_exc())
+                    # 此时 measured_snapshot 依然是 None，后面会触发 RetryRequest
+                
+                # 3. 发送结果 (无论是 Snapshot 还是 Retry)
                 self.put_result_in_response_queue(measured_snapshot, request)
 
-            except Exception:  # pylint: disable=broad-except
-                # 异常情况：记录堆栈，并发送 RetryRequest 解除 Manager 死锁
-                error_msg = traceback.format_exc()
-                logger.error('Worker crashed during measurement: %s', error_msg)
-                
-                # 构造一个 RetryRequest 通知 Manager 这个任务失败了
-                # 这样 Manager 就会把它从 pending 列表中移除，避免死锁
-                retry_request = measurer_datatypes.RetryRequest(
-                    request.fuzzer, request.benchmark, request.trial_id,
-                    request.cycle, fail_count=1
-                )
-                
-                # 尝试把失败消息发回去，如果发不回去也没办法了
-                try:
-                    self.response_queue.put(retry_request)
-                except Exception:
-                    logger.error('Worker failed to send retry request.')
-
+            except Exception:
+                # [CRITICAL FIX] 这一层是最后的防线
+                # 如果 put_result_in_response_queue 也挂了，必须捕获住，
+                # 否则 Worker 进程会直接退出，导致 Manager 永久死锁。
+                logger.error('Worker CRASHED in main loop (queue error?): %s', 
+                             traceback.format_exc())
+            
             time.sleep(MEASUREMENT_TIMEOUT)
 
 
@@ -102,8 +81,6 @@ class LocalMeasureWorker(BaseMeasureWorker):
 
     def get_task_from_request_queue(
             self) -> measurer_datatypes.SnapshotMeasureRequest:
-        """Get item from request multiprocessing queue, block if necessary until
-        an item is available"""
         request = self.request_queue.get(block=True)
         return request
 
@@ -114,7 +91,8 @@ class LocalMeasureWorker(BaseMeasureWorker):
             logger.info('Put measured snapshot in response_queue')
             self.response_queue.put(measured_snapshot)
         else:
+            logger.warning('Measurement failed or crashed. Sending RetryRequest for cycle %d', request.cycle)
             retry_request = measurer_datatypes.RetryRequest(
                 request.fuzzer, request.benchmark, request.trial_id,
-                request.cycle)
+                request.cycle, fail_count=1) # 建议加上 fail_count
             self.response_queue.put(retry_request)
