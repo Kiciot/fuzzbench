@@ -18,6 +18,4 @@ SnapshotMeasureRequest = collections.namedtuple(
     'SnapshotMeasureRequest', ['fuzzer', 'benchmark', 'trial_id', 'cycle'])
 
 RetryRequest = collections.namedtuple(
-    'RetryRequest', ['fuzzer', 'benchmark', 'trial_id', 'cycle', 'fail_count'],
-    defaults=[0],
-)
+    'RetryRequest', ['fuzzer', 'benchmark', 'trial_id', 'cycle'])

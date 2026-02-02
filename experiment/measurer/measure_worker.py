@@ -90,10 +90,40 @@ class LocalMeasureWorker(BaseMeasureWorker):
         if measured_snapshot:
             logger.info('Put measured snapshot in response_queue')
             self.response_queue.put(measured_snapshot)
-        else:
-            logger.warning('Measurement failed or crashed. Sending RetryRequest for cycle %d', request.cycle)
+            return
+
+        # ---- failed path ----
+        logger.warning(
+            'Measurement failed or crashed. Sending RetryRequest for cycle %d',
+            request.cycle
+        )
+
+        prev_fail = getattr(request, 'fail_count', 0) or 0
+        next_fail = prev_fail + 1
+
+        # 兼容两种 RetryRequest：
+        # - 旧版：('fuzzer','benchmark','trial_id','cycle')
+        # - 新版：('fuzzer','benchmark','trial_id','cycle','fail_count')
+        fields = getattr(measurer_datatypes.RetryRequest, '_fields', ())
+        has_fail_count_field = 'fail_count' in fields
+
+        try:
+            if has_fail_count_field:
+                # 用“位置参数”构造更稳（namedtuple 的关键字参数在字段不匹配时会直接炸）
+                retry_request = measurer_datatypes.RetryRequest(
+                    request.fuzzer, request.benchmark, request.trial_id,
+                    request.cycle, next_fail
+                )
+            else:
+                retry_request = measurer_datatypes.RetryRequest(
+                    request.fuzzer, request.benchmark, request.trial_id,
+                    request.cycle
+                )
+        except TypeError:
+            # 最后的兜底：即使上面判断失误，也保证不会把 worker 搞崩
             retry_request = measurer_datatypes.RetryRequest(
                 request.fuzzer, request.benchmark, request.trial_id,
-                request.cycle, fail_count=getattr(request, 'fail_count', 0) + 1
-                ) # 建议加上 fail_count
-            self.response_queue.put(retry_request)
+                request.cycle
+            )
+
+        self.response_queue.put(retry_request)
