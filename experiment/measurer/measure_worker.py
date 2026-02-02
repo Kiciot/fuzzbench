@@ -94,5 +94,6 @@ class LocalMeasureWorker(BaseMeasureWorker):
             logger.warning('Measurement failed or crashed. Sending RetryRequest for cycle %d', request.cycle)
             retry_request = measurer_datatypes.RetryRequest(
                 request.fuzzer, request.benchmark, request.trial_id,
-                request.cycle, fail_count=1) # 建议加上 fail_count
+                request.cycle, fail_count=getattr(request, 'fail_count', 0) + 1
+                ) # 建议加上 fail_count
             self.response_queue.put(retry_request)
