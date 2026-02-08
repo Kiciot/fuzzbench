@@ -32,7 +32,7 @@ RUN apt-get update && \
 RUN git config --global http.proxy http://172.17.0.1:7890
 
 # 【关键修正】: 显式指定目录为 /afl
-RUN git clone -b dev https://github.com/Kiciot/AFLplusplus /afl
+RUN git clone https://github.com/Kiciot/AFLplusplus /afl
 
 # ==========================================
 # 4. 编译构建
