@@ -24,7 +24,7 @@ scipy==1.9.2
 seaborn==0.13.2
 sqlalchemy==1.4.41
 protobuf==3.20.3
-
+setuptools
 # Needed for development.
 pylint==2.15.4
 pytype==2022.10.13
