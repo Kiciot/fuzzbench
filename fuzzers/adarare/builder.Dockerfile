@@ -27,24 +27,17 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 # ==========================================
-# 3. 拉取 Adarare (AFL++ dev分支)
+# 3. 拉取并编译 Adarare (一步完成)
 # ==========================================
-RUN git config --global http.proxy http://172.17.0.1:7890
-
-# 【关键修正】: 显式指定目录为 /afl
-RUN git clone https://github.com/Kiciot/AFLplusplus /afl
-
-# ==========================================
-# 4. 编译构建
-# ==========================================
-WORKDIR /afl
-RUN unset CFLAGS CXXFLAGS && \
+# 核心修改：
+# 1. 不使用 WORKDIR /afl (避免改变全局状态)
+# 2. 使用 cd /afl && ... 在子 shell 中执行
+# 3. 编译完成后清理代理设置
+RUN git config --global http.proxy http://172.17.0.1:7890 && \
+    git clone https://github.com/Kiciot/AFLplusplus /afl && \
+    cd /afl && \
+    unset CFLAGS CXXFLAGS && \
     export CC=clang AFL_NO_X86=1 && \
-    # 使用 source-only 加速编译，除非你需要 QEMU
     PYTHON_INCLUDE=/ make source-only && \
-    cp utils/aflpp_driver/libAFLDriver.a /
-
-# 清理 git 配置
-RUN git config --global --unset http.proxy
-
-WORKDIR /src
+    cp utils/aflpp_driver/libAFLDriver.a / && \
+    git config --global --unset http.proxy
