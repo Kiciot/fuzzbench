@@ -99,14 +99,21 @@ RUN set -eux; \
 # -----------------------------
 WORKDIR $SRC
 RUN set -eux; \
+  urls=( \
+    "https://github.com/GNOME/libxml2.git" \
+    "https://hub.fastgit.xyz/GNOME/libxml2.git" \
+  ); \
+  ok=0; \
+  for u in "${urls[@]}"; do \
     for i in 1 2 3 4 5; do \
       rm -rf libxml2; \
-      git clone --depth 1 --filter=blob:none \
-        https://gitlab.gnome.org/GNOME/libxml2.git libxml2 && break; \
-      echo "git clone libxml2 failed, retry $i/5"; \
+      git clone --depth 1 --filter=blob:none "$u" libxml2 && { ok=1; break; } || true; \
+      echo "git clone libxml2 from $u failed, retry $i/5"; \
       sleep 10; \
     done; \
-    test -d libxml2
+    [ "$ok" -eq 1 ] && break; \
+  done; \
+  test -d libxml2
 
 WORKDIR $SRC/libxml2
 COPY build.sh $SRC/
