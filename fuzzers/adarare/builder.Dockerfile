@@ -46,3 +46,5 @@ RUN unset CFLAGS CXXFLAGS && \
 
 # 清理 git 配置
 RUN git config --global --unset http.proxy
+
+WORKDIR /src
