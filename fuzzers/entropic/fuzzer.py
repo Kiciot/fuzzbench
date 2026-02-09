@@ -6,12 +6,22 @@ def build():
     libfuzzer_fuzzer.build()
 
 def fuzz(input_corpus, output_corpus, target_binary):
-    # libFuzzer 约定：第一个 corpus 目录是“写回”的输出 corpus
-    # FuzzBench 传进来的 output_corpus 正好满足这个语义
+    env = os.environ.copy()
+
+    # FuzzBench 通常把 target 放在 /out/
+    if os.path.isabs(target_binary):
+        target_path = target_binary
+    else:
+        target_path = os.path.join("/out", target_binary)
+
     cmd = [
-        target_binary,
-        '-entropic=1',
+        target_path,
+        "-entropic=1",
+        # 推荐同时给工作 corpus(可写) + 种子 corpus(只读)
         output_corpus,
         input_corpus,
+        # 可选：让崩溃/超时样本稳定落在 output_corpus 下，便于 runner 收集
+        # f"-artifact_prefix={output_corpus}/",
     ]
-    subprocess.check_call(cmd, env=os.environ.copy())
+
+    subprocess.check_call(cmd, env=env)
