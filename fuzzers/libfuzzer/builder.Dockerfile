@@ -51,7 +51,6 @@ RUN set -eux; \
   rm -rf /llvm-project; \
   mkdir -p /llvm-project; \
   cd /llvm-project; \
-  \
   git init; \
   git remote add origin https://github.com/llvm/llvm-project.git; \
   git -c http.version=HTTP/1.1 fetch --depth 1 origin "${LLVM_COMMIT}"; \
@@ -60,19 +59,16 @@ RUN set -eux; \
   cd compiler-rt/lib/fuzzer; \
   rm -f ./*.o /usr/lib/libFuzzer.a /lib/libFuzzingEngine.a; \
   \
-  # Build objects (parallel)
   for f in *.cpp; do \
-    clang++ -stdlib=libc++ -fPIC -O2 -std=c++11 "$f" -c & \
+    clang++ -stdlib=libc++ -fPIC -O2 -std=c++17 "$f" -c & \
   done; \
   wait; \
   \
-  # Create archive with index
   ar rcs /usr/lib/libFuzzer.a ./*.o; \
   ranlib /usr/lib/libFuzzer.a; \
   \
-  # Sanity-check: core symbols must exist (fail fast if archive is incomplete)
-  nm -C /usr/lib/libFuzzer.a | grep -q "fuzzer::Fuzzer::Fuzzer" ; \
+  # No SIGPIPE under pipefail:
+  nm -C /usr/lib/libFuzzer.a | awk 'index($0,"fuzzer::Fuzzer::Fuzzer"){found=1} END{exit !found}'; \
   \
-  # Make default engine path consistent with our pinned libFuzzer
   cp -f /usr/lib/libFuzzer.a /lib/libFuzzingEngine.a; \
   ranlib /lib/libFuzzingEngine.a
