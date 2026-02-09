@@ -37,7 +37,7 @@ RUN set -eux; \
   git remote add origin https://github.com/llvm/llvm-project.git; \
   \
   # Fetch only the pinned commit, shallow + blob-less.
-  git -c http.version=HTTP/1.1 fetch --depth 1 --filter=blob:none origin "${LLVM_COMMIT}"; \
+  git -c http.version=HTTP/1.1 fetch --depth 1 origin "${LLVM_COMMIT}"; \
   git checkout -q FETCH_HEAD; \
   \
   cd compiler-rt/lib/fuzzer; \
