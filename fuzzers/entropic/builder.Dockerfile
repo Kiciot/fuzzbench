@@ -27,20 +27,22 @@ RUN set -eux; \
   printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
     > /etc/apt/apt.conf.d/80-retries
 
-# Minimal deps (git/ca-certs for checkout_commit, etc.)
+# Minimal deps (+file/binutils for sanity checks)
 RUN set -eux; \
   apt-get update; \
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
     git \
+    file \
+    binutils \
   ; \
   rm -rf /var/lib/apt/lists/*
 
 # ----------------------------
 # Compatibility: provide /usr/lib/libFuzzer.a
 # Some FuzzBench benchmark build scripts still hardcode this legacy path.
-# We symlink it to compiler-rt's libclang_rt.fuzzer-<arch>.a with the *correct* arch,
-# to avoid accidentally picking an i386 archive on amd64 builds.
+# We symlink it to compiler-rt's libclang_rt.fuzzer-<arch>.a with the correct arch,
+# avoiding accidental i386 archives on amd64 builds.
 # ----------------------------
 RUN set -eux; \
   command -v clang >/dev/null; \
@@ -55,10 +57,8 @@ RUN set -eux; \
   \
   resdir="$(clang -print-resource-dir)"; \
   \
-  # Preferred canonical location (clang resource dir)
   cand="${resdir}/lib/linux/libclang_rt.fuzzer-${rt_arch}.a"; \
   if [[ ! -f "${cand}" ]]; then \
-    # Fallback: search in common system paths, but still filter by arch in filename.
     cand="$(find /usr/lib /usr/local/lib -maxdepth 8 -type f \
       -name "libclang_rt.fuzzer-${rt_arch}.a" -print 2>/dev/null | head -n1 || true)"; \
   fi; \
@@ -75,6 +75,6 @@ RUN set -eux; \
   echo "libFuzzer.a -> $(readlink -f /usr/lib/libFuzzer.a)"; \
   file /usr/lib/libFuzzer.a; \
   \
-  # Sanity: should be a valid archive and contain driver symbols
-  nm -A /usr/lib/libFuzzer.a | grep -E -q 'FuzzerDriver|LLVMFuzzerTestOneInput' || true; \
+  # Sanity (soft): symbol presence check; don't fail build if toolchain strips it
+  nm -A /usr/lib/libFuzzer.a 2>/dev/null | grep -E -q 'FuzzerDriver|LLVMFuzzerTestOneInput' || true; \
   ls -l /usr/lib/libFuzzer.a
