@@ -13,8 +13,8 @@
 # limitations under the License.
 """Integration code for libFuzzer fuzzer."""
 
-import subprocess
 import os
+import subprocess
 
 from fuzzers import utils
 
@@ -36,8 +36,7 @@ def build():
 
 
 def fuzz(input_corpus, output_corpus, target_binary):
-    """Run fuzzer. Wrapper that uses the defaults when calling
-    run_fuzzer."""
+    """Run fuzzer. Wrapper that uses the defaults when calling run_fuzzer."""
     run_fuzzer(input_corpus, output_corpus, target_binary)
 
 
@@ -46,23 +45,23 @@ def run_fuzzer(input_corpus, output_corpus, target_binary, extra_flags=None):
     if extra_flags is None:
         extra_flags = []
 
-    # Seperate out corpus and crash directories as sub-directories of
-    # |output_corpus| to avoid conflicts when corpus directory is reloaded.
+    # Separate corpus and crash directories as sub-directories of |output_corpus|
+    # to avoid conflicts when corpus directory is reloaded.
     crashes_dir = os.path.join(output_corpus, 'crashes')
-    output_corpus = os.path.join(output_corpus, 'corpus')
-    os.makedirs(crashes_dir)
-    os.makedirs(output_corpus)
+    corpus_dir = os.path.join(output_corpus, 'corpus')
+    os.makedirs(crashes_dir, exist_ok=True)
+    os.makedirs(corpus_dir, exist_ok=True)
 
     # Enable symbolization if needed.
     # Note: if the flags are like `symbolize=0:..:symbolize=1` then
     # only symbolize=1 is respected.
     for flag in extra_flags:
         if flag.startswith('-focus_function'):
-            if 'ASAN_OPTIONS' in os.environ:
+            if 'ASAN_OPTIONS' in os.environ and os.environ['ASAN_OPTIONS']:
                 os.environ['ASAN_OPTIONS'] += ':symbolize=1'
             else:
                 os.environ['ASAN_OPTIONS'] = 'symbolize=1'
-            if 'UBSAN_OPTIONS' in os.environ:
+            if 'UBSAN_OPTIONS' in os.environ and os.environ['UBSAN_OPTIONS']:
                 os.environ['UBSAN_OPTIONS'] += ':symbolize=1'
             else:
                 os.environ['UBSAN_OPTIONS'] = 'symbolize=1'
@@ -78,6 +77,9 @@ def run_fuzzer(input_corpus, output_corpus, target_binary, extra_flags=None):
         '-ignore_ooms=1',
         '-ignore_timeouts=1',
         '-ignore_crashes=1',
+
+        # LibFuzzer entropic power schedule (keep as-is unless you intentionally
+        # want to disable it for a "classic" baseline).
         '-entropic=1',
         '-keep_seed=1',
         '-cross_over_uniform_dist=1',
@@ -90,13 +92,16 @@ def run_fuzzer(input_corpus, output_corpus, target_binary, extra_flags=None):
         # Store crashes along with corpus for bug based benchmarking.
         f'-artifact_prefix={crashes_dir}/',
     ]
+
     flags += extra_flags
-    if 'ADDITIONAL_ARGS' in os.environ:
-        flags += os.environ['ADDITIONAL_ARGS'].split(' ')
+
+    if 'ADDITIONAL_ARGS' in os.environ and os.environ['ADDITIONAL_ARGS']:
+        flags += os.environ['ADDITIONAL_ARGS'].split()
+
     dictionary_path = utils.get_dictionary_path(target_binary)
     if dictionary_path:
         flags.append('-dict=' + dictionary_path)
 
-    command = [target_binary] + flags + [output_corpus, input_corpus]
+    command = [target_binary] + flags + [corpus_dir, input_corpus]
     print('[run_fuzzer] Running command: ' + ' '.join(command))
     subprocess.check_call(command)
