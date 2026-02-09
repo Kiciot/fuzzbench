@@ -15,6 +15,17 @@
 ARG parent_image
 FROM $parent_image
 
+ARG HTTP_PROXY="http://172.17.0.1:7890"
+ARG HTTPS_PROXY="http://172.17.0.1:7890"
+ARG NO_PROXY="localhost,127.0.0.1,::1,172.17.0.0/16"
+
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY} \
+    http_proxy=${HTTP_PROXY} \
+    https_proxy=${HTTPS_PROXY} \
+    no_proxy=${NO_PROXY}
+
 # honggfuzz requires libfd and libunwid.
 RUN apt-get update -y && \
     apt-get install -y \
@@ -28,9 +39,12 @@ RUN apt-get update -y && \
 # dependent code that may not work on the machines we actually fuzz on.
 # Create an empty object file which will become the FUZZER_LIB lib (since
 # honggfuzz doesn't need this when hfuzz-clang(++) is used).
-RUN git clone https://github.com/google/honggfuzz.git /honggfuzz && \
+# Download honggfuzz (oss-fuzz branch) with a shallow clone to reduce network load.
+RUN git config --global http.version HTTP/1.1 && \
+    git config --global http.lowSpeedLimit 1 && \
+    git config --global http.lowSpeedTime 300 && \
+    git clone --depth 1 --branch oss-fuzz https://github.com/google/honggfuzz.git /honggfuzz && \
     cd /honggfuzz && \
-    git checkout oss-fuzz && \
     CFLAGS="-O3 -funroll-loops" make && \
     touch empty_lib.c && \
     cc -c -o empty_lib.o empty_lib.c
