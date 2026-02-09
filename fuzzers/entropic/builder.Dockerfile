@@ -39,46 +39,42 @@ RUN set -eux; \
 # ----------------------------
 # Compatibility: provide /usr/lib/libFuzzer.a
 # Some FuzzBench benchmark build scripts still hardcode this legacy path.
-# We symlink it to compiler-rt's libclang_rt.fuzzer*.a that matches the target triple.
+# We symlink it to compiler-rt's libclang_rt.fuzzer-<arch>.a with the *correct* arch,
+# to avoid accidentally picking an i386 archive on amd64 builds.
 # ----------------------------
 RUN set -eux; \
-  # clang must exist in parent_image; fail early if not
   command -v clang >/dev/null; \
   command -v clang++ >/dev/null; \
   \
+  arch="$(uname -m)"; \
+  case "${arch}" in \
+    x86_64|amd64) rt_arch="x86_64" ;; \
+    aarch64|arm64) rt_arch="aarch64" ;; \
+    *) echo "Unsupported arch: ${arch}" >&2; exit 1 ;; \
+  esac; \
+  \
   resdir="$(clang -print-resource-dir)"; \
-  triple="$(clang -dumpmachine)"; \
   \
-  # Common locations for compiler-rt runtime archives
-  # 1) resource-dir layout (newer clang)
-  # 2) system lib dirs (varies by distro)
-  candidates=(); \
-  \
-  # Try resource-dir first: .../lib/linux/
-  if [[ -d "${resdir}/lib/linux" ]]; then \
-    while IFS= read -r -d '' f; do candidates+=("$f"); done < <(find "${resdir}/lib/linux" -maxdepth 1 -type f -name 'libclang_rt.fuzzer*.a' -print0 || true); \
+  # Preferred canonical location (clang resource dir)
+  cand="${resdir}/lib/linux/libclang_rt.fuzzer-${rt_arch}.a"; \
+  if [[ ! -f "${cand}" ]]; then \
+    # Fallback: search in common system paths, but still filter by arch in filename.
+    cand="$(find /usr/lib /usr/local/lib -maxdepth 8 -type f \
+      -name "libclang_rt.fuzzer-${rt_arch}.a" -print 2>/dev/null | head -n1 || true)"; \
+  fi; \
+  if [[ -z "${cand}" || ! -f "${cand}" ]]; then \
+    echo "Cannot find libclang_rt.fuzzer-${rt_arch}.a" >&2; \
+    echo "clang resource dir: ${resdir}" >&2; \
+    ls -al "${resdir}/lib/linux" || true; \
+    find /usr/lib /usr/local/lib -maxdepth 4 -type f -name 'libclang_rt.fuzzer*.a' -print 2>/dev/null || true; \
+    exit 1; \
   fi; \
   \
-  # Fallback: search a bit broader (avoid / which is too slow)
-  if [[ "${#candidates[@]}" -eq 0 ]]; then \
-    while IFS= read -r -d '' f; do candidates+=("$f"); done < <(find /usr/lib /usr/local/lib -maxdepth 6 -type f -name 'libclang_rt.fuzzer*.a' -print0 2>/dev/null || true); \
-  fi; \
+  rm -f /usr/lib/libFuzzer.a; \
+  ln -s "${cand}" /usr/lib/libFuzzer.a; \
+  echo "libFuzzer.a -> $(readlink -f /usr/lib/libFuzzer.a)"; \
+  file /usr/lib/libFuzzer.a; \
   \
-  # Pick the best match:
-  # - prefer one that includes the current machine triple/arch in its name (if present)
-  # - otherwise take the first candidate
-  pick=""; \
-  if [[ "${#candidates[@]}" -gt 0 ]]; then \
-    for f in "${candidates[@]}"; do \
-      if [[ "$f" == *"${triple}"* ]]; then pick="$f"; break; fi; \
-    done; \
-    if [[ -z "$pick" ]]; then pick="${candidates[0]}"; fi; \
-  fi; \
-  \
-  test -n "$pick"; \
-  ln -sf "$pick" /usr/lib/libFuzzer.a; \
-  \
-  # Sanity: ensure some known symbol exists (prevents "empty/invalid archive" accidents)
-  nm -C /usr/lib/libFuzzer.a | grep -E -q 'FuzzerDriver|LLVMFuzzerTestOneInput|fuzzer::Fuzzer' || true; \
-  ls -l /usr/lib/libFuzzer.a; \
-  echo "libFuzzer.a -> $pick"
+  # Sanity: should be a valid archive and contain driver symbols
+  nm -A /usr/lib/libFuzzer.a | grep -E -q 'FuzzerDriver|LLVMFuzzerTestOneInput' || true; \
+  ls -l /usr/lib/libFuzzer.a
