@@ -1,15 +1,20 @@
-# AFL++ with AdaRare Scheduling
+# AdaRare (Full)
 
-## Fuzzer Name
-AFL++ (AdaRare)
+AdaRare is a rarity-aware greybox fuzzing scheduler built on top of AFL++.
+This variant evaluates the complete AdaRare design, including contextual
+bandit scheduling, CmpLog reward feedback, and A6 off-policy weighting.
 
-## Description
-This fuzzer is a research variant of [AFL++](https://github.com/AFLplusplus/AFLplusplus) that implements a **lightweight adaptive scheduling and power allocation** framework.
+This FuzzBench integration pins AFL++ to the following AdaRare full commit:
 
-## Core Features
-- **Adaptive Power Scheduling**: Replaces the standard AFL++ schedule with a Multi-Armed Bandit (MAB) based approach (implemented via `adarare_bandit.c`).
-- **Efficiency**: Designed to optimize seed selection and energy allocation dynamically to improve coverage convergence speed.
-- **Implementation**: The logic is integrated directly into the AFL++ fuzzing loop, maintaining compatibility with standard AFL++ instrumentation.
+- `72127243cef48d2551d8d02a8bb0aeb57055fc5d`
 
-## Research Context
-This integration serves as a baseline for evaluating the effectiveness of adaptive scheduling strategies in Coverage-Guided Fuzzing (CGF). The source code is hosted at [https://github.com/Kiciot/AFLplusplus](https://github.com/Kiciot/AFLplusplus).
+Key enabled components in this full variant include:
+
+- Contextual/LinUCB-based arm selection
+- Multi-objective reward shaping over coverage, rarity, throughput, and cmp progress
+- Post-exec CmpLog reward feedback into the bandit
+- A6 meta-arm with off-policy IPS/clipped-IPS weighting
+- Dynamic dictionary scheduling and per-arm policy control
+
+This variant is intended to serve as the reference implementation for
+AdaRare ablation studies.

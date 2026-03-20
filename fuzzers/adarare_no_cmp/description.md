@@ -1,15 +1,22 @@
-# AFL++ with AdaRare Scheduling
+# AdaRare (No Cmp Reward)
 
-## Fuzzer Name
-AFL++ (AdaRare)
+AdaRare is a rarity-aware greybox fuzzing scheduler built on top of AFL++.
+This ablation variant disables CmpLog-derived reward feedback into the
+bandit scheduler while preserving the rest of the AdaRare system.
 
-## Description
-This fuzzer is a research variant of [AFL++](https://github.com/AFLplusplus/AFLplusplus) that implements a **lightweight adaptive scheduling and power allocation** framework.
+This FuzzBench integration pins AFL++ to the following AdaRare no-cmp commit:
 
-## Core Features
-- **Adaptive Power Scheduling**: Replaces the standard AFL++ schedule with a Multi-Armed Bandit (MAB) based approach (implemented via `adarare_bandit.c`).
-- **Efficiency**: Designed to optimize seed selection and energy allocation dynamically to improve coverage convergence speed.
-- **Implementation**: The logic is integrated directly into the AFL++ fuzzing loop, maintaining compatibility with standard AFL++ instrumentation.
+- `b4edae3bb73849d3ada60faead85392e1fd0415a`
 
-## Research Context
-This integration serves as a baseline for evaluating the effectiveness of adaptive scheduling strategies in Coverage-Guided Fuzzing (CGF). The source code is hosted at [https://github.com/Kiciot/AFLplusplus](https://github.com/Kiciot/AFLplusplus).
+Ablation intent:
+
+- Remove cmp-progress reward injection into AdaRare's reward pipeline
+- Keep the remaining AdaRare mechanisms active, including:
+  - contextual/LinUCB scheduling
+  - rarity- and coverage-aware reward shaping
+  - A6 meta-arm and off-policy weighting
+  - standard cmplog/redqueen execution paths
+
+This variant is designed to isolate the contribution of continuous cmp-based
+reward feedback, without turning off AFL++'s underlying cmplog-related
+execution support itself.
