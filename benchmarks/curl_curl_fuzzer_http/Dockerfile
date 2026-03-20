@@ -72,7 +72,8 @@ RUN set -eux; \
 # Use curl-fuzzer's scripts to get latest dependencies.
 # This step later triggers OpenSSL clone in build.sh scripts; it will inherit git configs above.
 RUN set -eux; \
-  "$SRC/curl_fuzzer/scripts/ossfuzzdeps.sh"
+    # 增加调试输出
+    /bin/bash -x "$SRC/curl_fuzzer/scripts/ossfuzzdeps.sh"
 
 WORKDIR $SRC/curl_fuzzer
 
