@@ -42,7 +42,7 @@ RUN apt-get update && \
 # Download afl++.using afl++4.35c
 RUN git clone https://github.com/Kiciot/AFLplusplus /afl && \
     cd /afl && \
-    git checkout 72127243cef48d2551d8d02a8bb0aeb57055fc5d
+    git checkout b4edae3bb73849d3ada60faead85392e1fd0415a
 
 RUN cd /afl && \
     unset CFLAGS CXXFLAGS && \
