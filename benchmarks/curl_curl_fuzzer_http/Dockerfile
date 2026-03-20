@@ -1,20 +1,12 @@
 # Copyright 2016 Google Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
+# ...
 ################################################################################
 
 FROM gcr.io/oss-fuzz-base/base-builder@sha256:87ca1e9e19235e731fac8de8d1892ebe8d55caf18e7aa131346fc582a2034fdd
+
+# --- Proxy (keep both upper/lower to cover all tools) ---
 ENV HTTP_PROXY=http://172.17.0.1:7890
 ENV HTTPS_PROXY=http://172.17.0.1:7890
 ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
@@ -22,14 +14,67 @@ ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
 ENV http_proxy=$HTTP_PROXY
 ENV https_proxy=$HTTPS_PROXY
 ENV no_proxy=$NO_PROXY
+
+# --- Git robustness knobs (apply globally so build scripts inherit) ---
+# Notes:
+# - Force HTTP/1.1 (often more stable than HTTP/2 under certain proxies / TLS middleboxes)
+# - Relax "low speed" abort logic to avoid "Operation too slow" kill
+# - Increase postBuffer; reduce compression to reduce CPU spikes and pack instability
+# - Limit request concurrency a bit (some proxies + high concurrency = flaky)
+RUN set -eux; \
+  git config --global http.proxy "${HTTP_PROXY}"; \
+  git config --global https.proxy "${HTTPS_PROXY}"; \
+  git config --global http.version HTTP/1.1; \
+  git config --global http.lowSpeedLimit 1; \
+  git config --global http.lowSpeedTime 600; \
+  git config --global http.postBuffer 524288000; \
+  git config --global core.compression 0; \
+  git config --global transfer.fsckobjects false; \
+  git config --global fetch.fsckobjects false; \
+  git config --global receive.fsckobjects false; \
+  git config --global pack.threads 1; \
+  git config --global http.maxRequests 4
+
+# Optional: make TLS less quirky for some environments (usually safe to keep default).
+# RUN set -eux; git config --global http.sslVerify true
+
+# A small helper for retrying git operations in Docker build.
+# We keep it inline (no extra file) to avoid altering project layout.
+RUN set -eux; \
+  cat >/usr/local/bin/git_retry <<'EOF'; \
+#!/usr/bin/env bash
+set -euo pipefail
+n="${GIT_RETRY_N:-6}"
+sleep_s="${GIT_RETRY_SLEEP:-8}"
+i=1
+while true; do
+  if "$@"; then
+    exit 0
+  fi
+  if [ "$i" -ge "$n" ]; then
+    echo "[git_retry] failed after ${n} attempts: $*" >&2
+    exit 1
+  fi
+  echo "[git_retry] attempt ${i} failed; retrying in ${sleep_s}s: $*" >&2
+  sleep "${sleep_s}"
+  i=$((i+1))
+done
+EOF \
+  chmod +x /usr/local/bin/git_retry
+
 # Curl will be checked out to the commit hash specified in benchmark.yaml.
-RUN git config --global http.proxy http://172.17.0.1:7890
-RUN git clone https://github.com/curl/curl-fuzzer /src/curl_fuzzer
-RUN git -C /src/curl_fuzzer checkout dd486c1e5910e722e43c451d4de928ac80f5967d
-RUN git clone --depth 1 https://github.com/curl/curl.git /src/curl
+# Use retry for the initial clones too (these are also subject to transient network).
+RUN set -eux; \
+  git_retry git clone https://github.com/curl/curl-fuzzer /src/curl_fuzzer; \
+  git -C /src/curl_fuzzer checkout dd486c1e5910e722e43c451d4de928ac80f5967d; \
+  git_retry git clone --depth 1 --single-branch https://github.com/curl/curl.git /src/curl
 
 # Use curl-fuzzer's scripts to get latest dependencies.
-RUN $SRC/curl_fuzzer/scripts/ossfuzzdeps.sh
+# This step later triggers OpenSSL clone in build.sh scripts; it will inherit git configs above.
+RUN set -eux; \
+  "$SRC/curl_fuzzer/scripts/ossfuzzdeps.sh"
 
 WORKDIR $SRC/curl_fuzzer
+
+# Keep build.sh as-is (but it will benefit from global git settings).
 COPY build.sh $SRC/
