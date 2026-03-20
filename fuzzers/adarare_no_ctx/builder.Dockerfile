@@ -14,14 +14,23 @@
 
 ARG parent_image
 FROM $parent_image
+
+# 保持代理配置，供后续的 git 或 cargo 等工具使用
 ENV HTTP_PROXY=http://172.17.0.1:7890
 ENV HTTPS_PROXY=http://172.17.0.1:7890
 ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
 ENV http_proxy=$HTTP_PROXY
 ENV https_proxy=$HTTPS_PROXY
 ENV no_proxy=$NO_PROXY
-RUN apt-get update && \
-    apt-get install -y \
+
+# 1. 替换源为清华镜像
+# 2. 使用 env -u 强行在执行 apt-get 时忽略代理
+RUN set -eux; \
+    sed -i 's/archive.ubuntu.com/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list; \
+    sed -i 's/security.ubuntu.com/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list; \
+    sed -i 's/mirrors.edge.kernel.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list; \
+    env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY apt-get update && \
+    env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY apt-get install -y --fix-missing \
         build-essential \
         python3-dev \
         python3-setuptools \
@@ -34,7 +43,6 @@ RUN apt-get update && \
         libpixman-1-dev \
         cargo \
         libgtk-3-dev \
-        # for QEMU mode
         ninja-build \
         gcc-$(gcc --version|head -n1|sed 's/\..*//'|sed 's/.* //')-plugin-dev \
         libstdc++-$(gcc --version|head -n1|sed 's/\..*//'|sed 's/.* //')-dev
