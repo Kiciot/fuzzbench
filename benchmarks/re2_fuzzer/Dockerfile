@@ -48,29 +48,25 @@ RUN set -eux; \
     git config --global https.proxy "${HTTPS_PROXY:-$HTTP_PROXY}"; \
   fi
 
-# ----------------------------
-# Fetch re2 (optionally pin commit)
-# ----------------------------
-ARG RE2_COMMIT=""   # e.g. "a1b2c3..." (optional). Leave empty to use HEAD.
-RUN set -eux; \
-  rm -rf /src/re2; \
-  mkdir -p /src; \
-  cd /src; \
-  if [[ -z "${RE2_COMMIT}" ]]; then \
-    git clone --depth 1 https://github.com/google/re2.git; \
-  else \
-    git init re2; \
-    cd re2; \
-    git remote add origin https://github.com/google/re2.git; \
-    git fetch --depth 1 origin "${RE2_COMMIT}"; \
-    git checkout -q FETCH_HEAD; \
-  fi
+# 1. 安装必要的构建工具 (RE2 编译主要需要 make/autoconf)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    make \
+    autoconf \
+    automake \
+    libtool \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
 
-# ----------------------------
-# Dictionary (wget uses proxy; ok)
-# ----------------------------
+# 2. 获取 RE2 源码 (使用 git_retry 或普通 clone，因其极小，失败率低)
 RUN set -eux; \
-  wget -qO "$OUT/fuzzer.dict" \
+    git clone --depth 1 https://github.com/google/re2.git /src/re2
+
+# 3. 获取正则表达式字典 (对提升 Fuzzer 覆盖率非常有帮助)
+RUN set -eux; \
+    wget -qO "$OUT/fuzzer.dict" \
     https://raw.githubusercontent.com/google/fuzzing/master/dictionaries/regexp.dict
 
+# 4. 拷贝 FuzzBench 特定的构建脚本和 Target 逻辑
 COPY build.sh target.cc $SRC/
+
+WORKDIR /src/re2
