@@ -1,30 +1,28 @@
 # Copyright 2020 Google LLC
-# Licensed under the Apache License, Version 2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 ARG parent_image
 FROM $parent_image
-
-# -----------------------------------------------------------------------------
-# Proxy (keep for git/cargo; apt will explicitly bypass)
-# -----------------------------------------------------------------------------
 ENV HTTP_PROXY=http://172.17.0.1:7890
 ENV HTTPS_PROXY=http://172.17.0.1:7890
 ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
 ENV http_proxy=$HTTP_PROXY
 ENV https_proxy=$HTTPS_PROXY
 ENV no_proxy=$NO_PROXY
-
-# -----------------------------------------------------------------------------
-# APT: TUNA mirror + bypass proxy for apt-get (stable + fast in CN)
-# -----------------------------------------------------------------------------
-RUN set -eux; \
-    sed -i 's/archive.ubuntu.com/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list; \
-    sed -i 's/security.ubuntu.com/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list; \
-    sed -i 's/mirrors.edge.kernel.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list; \
-    env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY apt-get update; \
-    env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY apt-get install -y --no-install-recommends --fix-missing \
+RUN apt-get update && \
+    apt-get install -y \
         build-essential \
-        clang \
         python3-dev \
         python3-setuptools \
         automake \
@@ -35,57 +33,22 @@ RUN set -eux; \
         libglib2.0-dev \
         libpixman-1-dev \
         cargo \
-        ninja-build \
         libgtk-3-dev \
-        gcc-plugin-dev \
-        libstdc++-dev \
-        ca-certificates \
-    ; \
-    rm -rf /var/lib/apt/lists/*
+        # for QEMU mode
+        ninja-build \
+        gcc-$(gcc --version|head -n1|sed 's/\..*//'|sed 's/.* //')-plugin-dev \
+        libstdc++-$(gcc --version|head -n1|sed 's/\..*//'|sed 's/.* //')-dev
 
-# -----------------------------------------------------------------------------
-# Git hardening: proxy + tolerate slow links + retries
-# -----------------------------------------------------------------------------
-RUN set -eux; \
-    git config --global http.proxy "$HTTP_PROXY"; \
-    git config --global https.proxy "$HTTPS_PROXY"; \
-    git config --global http.lowSpeedLimit 1; \
-    git config --global http.lowSpeedTime 600; \
-    git config --global http.postBuffer 524288000; \
-    git config --global http.version HTTP/1.1
+# Download afl++.using afl++4.35c
+RUN git config --global http.proxy http://172.17.0.1:7890
+RUN git clone -b dev https://github.com/AFLplusplus/AFLplusplus /afl && \
+    cd /afl && \
+    git checkout b4edae3bb73849d3ada60faead85392e1fd0415a
 
-# -----------------------------------------------------------------------------
-# AFL++ source fetch (robust): shallow/partial clone + retry + pinned commit
-# -----------------------------------------------------------------------------
-ARG AFLPP_REPO=https://github.com/Kiciot/AFLplusplus
-ARG AFLPP_COMMIT=b4edae3bb73849d3ada60faead85392e1fd0415a
-
-RUN set -eux; \
-    for i in 1 2 3 4 5; do \
-      rm -rf /afl; \
-      echo "[adarare] cloning AFL++ (try $i) ..." >&2; \
-      # Reduce payload:
-      #  - --filter=blob:none: partial clone (needs git >= 2.19; Ubuntu 20.04+ ok)
-      #  - --no-checkout: checkout pinned commit after clone
-      if git clone --filter=blob:none --no-checkout "$AFLPP_REPO" /afl; then \
-        cd /afl; \
-        git checkout -f "$AFLPP_COMMIT"; \
-        break; \
-      fi; \
-      echo "[adarare] clone failed, retrying..." >&2; \
-      sleep $((i * 5)); \
-    done; \
-    test -d /afl/.git
-
-# -----------------------------------------------------------------------------
-# Build AFL++ once (no duplicate builds)
-# - AFL_NO_X86=1: skip flaky x86 checks
-# - CC=clang
-# - PYTHON_INCLUDE=/ : keep as you used (but note: AFL++ python optional)
-# -----------------------------------------------------------------------------
-RUN set -eux; \
-    cd /afl; \
-    unset CFLAGS CXXFLAGS; \
-    export CC=clang AFL_NO_X86=1 PYTHON_INCLUDE=/; \
-    make -j"$(nproc)" all; \
+# Build without Python support as we don't need it.
+# Set AFL_NO_X86 to skip flaky tests.
+RUN cd /afl && \
+    unset CFLAGS CXXFLAGS && \
+    export CC=clang AFL_NO_X86=1 && \
+    PYTHON_INCLUDE=/ make && \
     cp utils/aflpp_driver/libAFLDriver.a /
