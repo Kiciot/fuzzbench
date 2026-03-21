@@ -41,7 +41,7 @@ RUN apt-get update && \
 
 # Download afl++.using afl++4.35c
 RUN git config --global http.proxy http://172.17.0.1:7890
-RUN git clone -b dev https://github.com/AFLplusplus/AFLplusplus /afl && \
+RUN git clone -b dev https://github.com/Kiciot/AFLplusplus /afl && \
     cd /afl && \
     git checkout b4edae3bb73849d3ada60faead85392e1fd0415a
 
