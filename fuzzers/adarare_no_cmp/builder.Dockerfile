@@ -27,7 +27,7 @@ RUN git config --global http.proxy http://172.17.0.1:7890 && \
     git config --global core.compression 0
 
 RUN for i in 1 2 3; do \
-      git clone -b dev https://github.com/Kiciot/AFLplusplus /afl && break || \
+      git clone https://github.com/Kiciot/AFLplusplus /afl && break || \
       (echo "Clone failed, retrying in 5s..." && sleep 5); \
     done && \
     cd /afl && \
