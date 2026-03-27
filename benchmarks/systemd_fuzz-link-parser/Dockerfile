@@ -15,21 +15,44 @@
 ################################################################################
 
 FROM gcr.io/oss-fuzz-base/base-builder@sha256:87ca1e9e19235e731fac8de8d1892ebe8d55caf18e7aa131346fc582a2034fdd
+
+# ---- Proxy (keep for git/curl etc.) ----
 ENV HTTP_PROXY=http://172.17.0.1:7890
 ENV HTTPS_PROXY=http://172.17.0.1:7890
 ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
-
 ENV http_proxy=$HTTP_PROXY
 ENV https_proxy=$HTTPS_PROXY
 ENV no_proxy=$NO_PROXY
-RUN apt-get update && \
-    apt-get install -y libcap-dev
-RUN git config --global http.proxy http://172.17.0.1:7890
-RUN git clone \
-        --depth 1 \
-        --branch v252 \
-        https://github.com/systemd/systemd && \
-    cp $SRC/systemd/tools/oss-fuzz.sh $SRC/build.sh && \
+
+# ---- APT: do NOT use proxy (most stable), add retries/timeouts ----
+RUN set -eux; \
+    printf '%s\n' \
+      'Acquire::Retries "8";' \
+      'Acquire::http::Timeout "60";' \
+      'Acquire::https::Timeout "60";' \
+      'Acquire::http::Pipeline-Depth "0";' \
+      'Acquire::https::Pipeline-Depth "0";' \
+      > /etc/apt/apt.conf.d/80-retries; \
+    env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
+      apt-get update; \
+    env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
+      apt-get install -y --no-install-recommends libcap-dev; \
+    rm -rf /var/lib/apt/lists/*
+
+# ---- Git: use proxy, but harden against slow links ----
+RUN set -eux; \
+    git config --global http.proxy "$HTTP_PROXY"; \
+    git config --global https.proxy "$HTTPS_PROXY"; \
+    git config --global http.lowSpeedLimit 1; \
+    git config --global http.lowSpeedTime 600; \
+    git config --global http.postBuffer 524288000; \
+    git config --global core.compression 0; \
+    git config --global http.version HTTP/1.1
+
+# Clone systemd (keep shallow clone)
+RUN set -eux; \
+    git clone --depth 1 --branch v252 https://github.com/systemd/systemd; \
+    cp $SRC/systemd/tools/oss-fuzz.sh $SRC/build.sh; \
     # Move shared libraries and tweak rpath for all $ARCHITECTURE.
     sed -i '119d;126d' $SRC/build.sh
 
