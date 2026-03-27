@@ -13,3 +13,18 @@
 # limitations under the License.
 
 FROM gcr.io/fuzzbench/base-image
+ENV HTTP_PROXY=http://172.17.0.1:7890
+ENV HTTPS_PROXY=http://172.17.0.1:7890
+ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
+
+ENV http_proxy=$HTTP_PROXY
+ENV https_proxy=$HTTPS_PROXY
+ENV no_proxy=$NO_PROXY
+# This makes interactive docker runs painless:
+ENV LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/out"
+#ENV AFL_MAP_SIZE=2621440
+ENV PATH="$PATH:/out"
+ENV AFL_SKIP_CPUFREQ=1
+ENV AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1
+ENV AFL_TESTCACHE_SIZE=2
+# RUN apt-get update && apt-get upgrade && apt install -y unzip git gdb joe

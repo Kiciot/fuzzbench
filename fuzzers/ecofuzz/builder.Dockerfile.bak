@@ -17,14 +17,10 @@ FROM $parent_image
 
 # Download and compile AFL v2.57b.
 # Set AFL_NO_X86 to skip flaky tests.
-# Download and compile EcoFuzz.
-# EcoFuzz is AFL-based; use the same AFL-style driver library build.
 RUN git clone \
-    --depth 1 \
-    --branch master \
-    https://github.com/MoonLight-SteinsGate/EcoFuzz.git /ecofuzz-src && \
-    mkdir -p /afl && \
-    cp -a /ecofuzz-src/EcoFuzz/. /afl/ && \
+        --depth 1 \
+        --branch v2.57b \
+        https://github.com/google/AFL.git /afl && \
     cd /afl && \
     CFLAGS= CXXFLAGS= AFL_NO_X86=1 make
 

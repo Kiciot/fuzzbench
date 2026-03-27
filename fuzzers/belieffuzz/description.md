@@ -1,0 +1,2 @@
+BeliefFuzz is an AFL-based greybox fuzzer that performs bounded seed scheduling with Monte Carlo planning and regret-aware power allocation.
+This integration is intended for apples-to-apples comparison against AFL-family schedulers.

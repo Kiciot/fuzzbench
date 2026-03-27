@@ -11,24 +11,17 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+#
 """Integration code for EcoFuzz fuzzer."""
 
 from fuzzers.afl import fuzzer as afl_fuzzer
 
 
 def build():
-    """Build benchmark."""
+    """Build benchmark using the AFL integration."""
     afl_fuzzer.build()
 
 
 def fuzz(input_corpus, output_corpus, target_binary):
-    """Run fuzzer."""
-    afl_fuzzer.prepare_fuzz_environment(input_corpus)
-
-    # Write AFL's output to /dev/null to avoid filling up disk by writing too
-    # much to log file. This is a problem in general with AFLFast but
-    # particularly with the lcms benchmark.
-    afl_fuzzer.run_afl_fuzz(input_corpus,
-                            output_corpus,
-                            target_binary,
-                            hide_output=True)
+    """Run EcoFuzz using the AFL integration."""
+    afl_fuzzer.fuzz(input_corpus, output_corpus, target_binary)
