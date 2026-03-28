@@ -17,67 +17,65 @@ ENV HTTP_PROXY=${HTTP_PROXY} \
     no_proxy=${NO_PROXY}
 
 # -----------------------------------------------------------------------------
-# Helper scripts: robust apt + curl
+# Helper scripts: robust apt + curl (Fixed Dockerfile parser issue)
 # -----------------------------------------------------------------------------
 RUN set -eux; \
-  cat > /usr/local/bin/_apt_install <<'EOF'; \
-#!/bin/sh
-set -eu
-unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
-export DEBIAN_FRONTEND=noninteractive
-
-# robust apt settings
-printf '%s\n' \
-  'Acquire::Retries "8";' \
-  'Acquire::http::Timeout "60";' \
-  'Acquire::https::Timeout "60";' \
-  'Acquire::http::Pipeline-Depth "0";' \
-  'Acquire::https::Pipeline-Depth "0";' \
-  'Acquire::https::No-Cache "true";' \
-  'Acquire::http::No-Cache "true";' \
-  'DPkg::Lock::Timeout "120";' \
-  > /etc/apt/apt.conf.d/80-fuzzbench-retries
-
-i=1
-while [ "$i" -le 8 ]; do
-  apt-get update && \
-  apt-get install -y --no-install-recommends --fix-missing "$@" && \
-  exit 0
-  echo "[apt] failed ($i/8): $*" >&2
-  i=$((i+1))
-  sleep 5
-  apt-get update --fix-missing || true
-done
-exit 1
-EOF
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy' \
+    'export DEBIAN_FRONTEND=noninteractive' \
+    '' \
+    'printf "%s\\n" \' \
+    '  "Acquire::Retries \"8\";" \' \
+    '  "Acquire::http::Timeout \"60\";" \' \
+    '  "Acquire::https::Timeout \"60\";" \' \
+    '  "Acquire::http::Pipeline-Depth \"0\";" \' \
+    '  "Acquire::https::Pipeline-Depth \"0\";" \' \
+    '  "Acquire::https::No-Cache \"true\";" \' \
+    '  "Acquire::http::No-Cache \"true\";" \' \
+    '  "DPkg::Lock::Timeout \"120\";" \' \
+    '  > /etc/apt/apt.conf.d/80-fuzzbench-retries' \
+    '' \
+    'i=1' \
+    'while [ "$i" -le 8 ]; do' \
+    '  apt-get update && \' \
+    '  apt-get install -y --no-install-recommends --fix-missing "$@" && \' \
+    '  exit 0' \
+    '  echo "[apt] failed ($i/8): $*" >&2' \
+    '  i=$((i+1))' \
+    '  sleep 5' \
+    '  apt-get update --fix-missing || true' \
+    'done' \
+    'exit 1' \
+    > /usr/local/bin/_apt_install; \
   chmod +x /usr/local/bin/_apt_install; \
   \
-  cat > /usr/local/bin/_curl_try <<'EOF'; \
-#!/bin/sh
-set -eu
-out="$1"; shift
-rm -f "$out"
-for url in "$@"; do
-  [ -n "$url" ] || continue
-  i=1
-  while [ "$i" -le 6 ]; do
-    rm -f "$out"
-    # Reduced internal curl retries to 3 to prevent infinite-looping combined with outer loop
-    if curl -fL \
-        --retry 3 --retry-connrefused --retry-delay 5 --retry-max-time 120 \
-        --connect-timeout 20 --max-time 600 \
-        -o "$out" "$url"; then
-      test -s "$out"
-      exit 0
-    fi
-    echo "[curl] failed ($i/6): $url" >&2
-    i=$((i+1))
-    sleep 5
-  done
-done
-echo "[curl] permanently failed" >&2
-exit 1
-EOF
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'out="$1"; shift' \
+    'rm -f "$out"' \
+    'for url in "$@"; do' \
+    '  [ -n "$url" ] || continue' \
+    '  i=1' \
+    '  while [ "$i" -le 6 ]; do' \
+    '    rm -f "$out"' \
+    '    if curl -fL \' \
+    '        --retry 3 --retry-connrefused --retry-delay 5 --retry-max-time 120 \' \
+    '        --connect-timeout 20 --max-time 600 \' \
+    '        -o "$out" "$url"; then' \
+    '      test -s "$out"' \
+    '      exit 0' \
+    '    fi' \
+    '    echo "[curl] failed ($i/6): $url" >&2' \
+    '    i=$((i+1))' \
+    '    sleep 5' \
+    '  done' \
+    'done' \
+    'echo "[curl] permanently failed" >&2' \
+    'exit 1' \
+    > /usr/local/bin/_curl_try; \
   chmod +x /usr/local/bin/_curl_try
 
 # -----------------------------------------------------------------------------
