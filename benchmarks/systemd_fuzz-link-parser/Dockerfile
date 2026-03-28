@@ -16,7 +16,7 @@ ENV HTTP_PROXY=${HTTP_PROXY} \
     https_proxy=${HTTPS_PROXY} \
     no_proxy=${NO_PROXY}
 
-# ---- APT: do NOT use proxy; use TUNA mirror; add retries/timeouts ----
+# ---- APT: use TUNA mirror and globally disable proxy for APT ----
 RUN set -eux; \
     sed -i 's|http://archive.ubuntu.com/ubuntu|http://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' /etc/apt/sources.list || true; \
     sed -i 's|http://security.ubuntu.com/ubuntu|http://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' /etc/apt/sources.list || true; \
@@ -26,12 +26,12 @@ RUN set -eux; \
       'Acquire::https::Timeout "60";' \
       'Acquire::http::Pipeline-Depth "0";' \
       'Acquire::https::Pipeline-Depth "0";' \
+      'Acquire::http::Proxy "false";' \
+      'Acquire::https::Proxy "false";' \
       > /etc/apt/apt.conf.d/80-retries; \
-    env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
-      apt-get update; \
-    env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
-      apt-get install -y --no-install-recommends --fix-missing \
-        ca-certificates git libcap-dev; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --fix-missing \
+      ca-certificates git libcap-dev; \
     rm -rf /var/lib/apt/lists/*
 
 # ---- Git: use proxy + harden; add retry wrapper ----
@@ -66,6 +66,8 @@ RUN set -eux; \
     _retry "git -C ${SRC}/systemd fetch --depth 1 origin v252"; \
     git -C "${SRC}/systemd" checkout -q FETCH_HEAD; \
     cp "${SRC}/systemd/tools/oss-fuzz.sh" "${SRC}/build.sh"; \
-    sed -i '119d;126d' "${SRC}/build.sh"
+    sed -i '119d;126d' "${SRC}/build.sh"; \
+    # 【新增此行】：利用已有的 _retry 脚本包裹 build.sh 中的 wget 下载命令，完美抵抗代理 503 断连
+    sed -i 's/wget -O/_retry wget -O/g' "${SRC}/build.sh"
 
 WORKDIR ${SRC}/systemd
