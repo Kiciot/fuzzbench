@@ -66,7 +66,9 @@ RUN set -eux; \
     for i in 1 2 3 4 5; do \
       git -C PROJ/libtiff fetch --depth 1 origin c8e1289deff3fa60ba833ccec6c030934b02c281 && break || (sleep 5); \
     done; \
-    git -C PROJ/libtiff checkout FETCH_HEAD
+    git -C PROJ/libtiff checkout FETCH_HEAD; \
+    # 修改 libtiff 内部的硬编码超时时间，从 5 秒放宽到 60 秒
+    sed -i 's/--timeout=5/--timeout=60/g' PROJ/libtiff/autogen.sh
 
 WORKDIR PROJ
 
