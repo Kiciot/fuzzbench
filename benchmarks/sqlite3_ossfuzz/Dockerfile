@@ -62,9 +62,10 @@ for url in "$@"; do
   i=1
   while [ "$i" -le 6 ]; do
     rm -f "$out"
+    # Reduced internal curl retries to 3 to prevent infinite-looping combined with outer loop
     if curl -fL \
-        --retry 12 --retry-connrefused --retry-delay 5 --retry-max-time 600 \
-        --connect-timeout 20 --max-time 1200 \
+        --retry 3 --retry-connrefused --retry-delay 5 --retry-max-time 120 \
+        --connect-timeout 20 --max-time 600 \
         -o "$out" "$url"; then
       test -s "$out"
       exit 0
@@ -100,9 +101,6 @@ RUN set -eux; \
 
 # -----------------------------------------------------------------------------
 # Fetch sqlite source (try multiple URLs; no git needed)
-#   - Primary: sqlite.org tarball endpoint
-#   - Fallback1: fossil tarball (same revision)
-#   - Fallback2: GitHub mirror (last resort; replace if you have your own mirror)
 # -----------------------------------------------------------------------------
 RUN set -eux; \
   mkdir -p "$SRC/sqlite3"; \
@@ -115,20 +113,19 @@ RUN set -eux; \
   tar xzf sqlite3.tar.gz --strip-components 1; \
   rm -f sqlite3.tar.gz
 
-# Build seed corpus safely (avoid xargs weirdness; zip reads from stdin)
+# -----------------------------------------------------------------------------
+# Build seed corpus safely using standard xargs
+# -----------------------------------------------------------------------------
 RUN set -eux; \
   cd "$SRC/sqlite3"; \
-  find . -name "*.test" -print0 | tr '\0' '\n' | zip -q "$SRC/ossfuzz_seed_corpus.zip" -@ || true; \
+  find . -name "*.test" -print0 | xargs -0 zip -q "$SRC/ossfuzz_seed_corpus.zip" || true; \
   test -s "$SRC/ossfuzz_seed_corpus.zip"
 
 WORKDIR $SRC/sqlite3
 
-# Copy build script.
-COPY build.sh $SRC/
-
-# Copy dicts if present without failing the build.
-# (If your Docker supports BuildKit, this stays fine; if not, it still works.)
-RUN set -eux; \
-  if ls "$SRC"/*.dict >/dev/null 2>&1; then \
-    cp -v "$SRC"/*.dict "$SRC"/; \
-  fi
+# -----------------------------------------------------------------------------
+# Copy build script and optional dicts
+# -----------------------------------------------------------------------------
+# Using glob pattern `*.dic[t]` is a Dockerfile trick: 
+# It safely copies .dict files if they exist, but won't crash the build if they don't.
+COPY build.sh *.dic[t] $SRC/
