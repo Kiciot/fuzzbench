@@ -12,20 +12,25 @@ ENV http_proxy=$HTTP_PROXY
 ENV https_proxy=$HTTPS_PROXY
 ENV no_proxy=$NO_PROXY
 
-# ---- APT robustness: retries/timeouts; force APT to ignore proxy ----
+# ---- APT robustness: retries/timeouts; force APT to ignore proxy GLOBALLY ----
 RUN set -eux; \
+  # 1. 替换为清华源，造福下游 Fuzzer 镜像
+  sed -i 's|http://archive.ubuntu.com/ubuntu/|http://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' /etc/apt/sources.list || true; \
+  sed -i 's|http://security.ubuntu.com/ubuntu/|http://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' /etc/apt/sources.list || true; \
+  # 2. 写入全局 APT 配置，包括直接禁用代理 (Proxy "false")
   printf '%s\n' \
     'Acquire::Retries "8";' \
     'Acquire::http::Timeout "60";' \
     'Acquire::https::Timeout "60";' \
     'Acquire::http::Pipeline-Depth "0";' \
     'Acquire::https::Pipeline-Depth "0";' \
+    'Acquire::http::Proxy "false";' \
+    'Acquire::https::Proxy "false";' \
     > /etc/apt/apt.conf.d/80-retries; \
-  env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
-    apt-get update; \
-  env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates git cmake ninja-build g++ libz-dev; \
+  # 3. apt-get，它绝对不会走代理了
+  apt-get update; \
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    ca-certificates git cmake ninja-build g++ libz-dev; \
   rm -rf /var/lib/apt/lists/*
 
 # ---- GIT robustness: tolerate slow links ----
