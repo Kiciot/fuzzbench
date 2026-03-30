@@ -67,10 +67,8 @@ RUN set -eux; \
       git -C PROJ/libtiff fetch --depth 1 origin c8e1289deff3fa60ba833ccec6c030934b02c281 && break || (sleep 5); \
     done; \
     git -C PROJ/libtiff checkout FETCH_HEAD; \
-    # 1. 放宽超时限制 (之前加的)
-    sed -i 's/--timeout=5/--timeout=60/g' PROJ/libtiff/autogen.sh; \
-    # 2. 【新增这行】把傲娇的 GNU 源替换为 GitHub 上的 GCC 官方镜像源
-    sed -i 's|https://git.savannah.gnu.org/cgit/config.git/plain|https://raw.githubusercontent.com/gcc-mirror/gcc/master|g' PROJ/libtiff/autogen.sh
+    # 【终极防封杀魔法】从“getting config.guess”这一行开始，把文件末尾所有的瞎下载代码全删掉！
+    sed -i '/getting config\.guess/,$d' PROJ/libtiff/autogen.sh
 
 WORKDIR PROJ
 
