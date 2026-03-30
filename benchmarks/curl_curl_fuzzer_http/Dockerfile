@@ -16,11 +16,6 @@ ENV https_proxy=$HTTPS_PROXY
 ENV no_proxy=$NO_PROXY
 
 # --- Git robustness knobs (apply globally so build scripts inherit) ---
-# Notes:
-# - Force HTTP/1.1 (often more stable than HTTP/2 under certain proxies / TLS middleboxes)
-# - Relax "low speed" abort logic to avoid "Operation too slow" kill
-# - Increase postBuffer; reduce compression to reduce CPU spikes and pack instability
-# - Limit request concurrency a bit (some proxies + high concurrency = flaky)
 RUN set -eux; \
   git config --global http.proxy "${HTTP_PROXY}"; \
   git config --global https.proxy "${HTTPS_PROXY}"; \
@@ -35,31 +30,28 @@ RUN set -eux; \
   git config --global pack.threads 1; \
   git config --global http.maxRequests 4
 
-# Optional: make TLS less quirky for some environments (usually safe to keep default).
-# RUN set -eux; git config --global http.sslVerify true
-
 # A small helper for retrying git operations in Docker build.
-# We keep it inline (no extra file) to avoid altering project layout.
+# Fixed parser issue by using printf instead of EOF heredoc.
 RUN set -eux; \
-  cat >/usr/local/bin/git_retry <<'EOF'; \
-#!/usr/bin/env bash
-set -euo pipefail
-n="${GIT_RETRY_N:-6}"
-sleep_s="${GIT_RETRY_SLEEP:-8}"
-i=1
-while true; do
-  if "$@"; then
-    exit 0
-  fi
-  if [ "$i" -ge "$n" ]; then
-    echo "[git_retry] failed after ${n} attempts: $*" >&2
-    exit 1
-  fi
-  echo "[git_retry] attempt ${i} failed; retrying in ${sleep_s}s: $*" >&2
-  sleep "${sleep_s}"
-  i=$((i+1))
-done
-EOF \
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'set -euo pipefail' \
+    'n="${GIT_RETRY_N:-6}"' \
+    'sleep_s="${GIT_RETRY_SLEEP:-8}"' \
+    'i=1' \
+    'while true; do' \
+    '  if "$@"; then' \
+    '    exit 0' \
+    '  fi' \
+    '  if [ "$i" -ge "$n" ]; then' \
+    '    echo "[git_retry] failed after ${n} attempts: $*" >&2' \
+    '    exit 1' \
+    '  fi' \
+    '  echo "[git_retry] attempt ${i} failed; retrying in ${sleep_s}s: $*" >&2' \
+    '  sleep "${sleep_s}"' \
+    '  i=$((i+1))' \
+    'done' \
+    > /usr/local/bin/git_retry; \
   chmod +x /usr/local/bin/git_retry
 
 # Curl will be checked out to the commit hash specified in benchmark.yaml.
