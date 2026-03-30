@@ -18,7 +18,16 @@ ENV no_proxy=$NO_PROXY
 # 3. 增强 Apt 稳健性：开启下载重试 + 避免安装非必要依赖 + 清理缓存
 # 如果使用代理拉取默认镜像源依然经常 502，可以在 apt-get update 前加一句换源命令：
 # RUN sed -i 's/archive.ubuntu.com/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list
-RUN echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries && \
+RUN set -eux; \
+    sed -i 's|http://archive.ubuntu.com/ubuntu/|http://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' /etc/apt/sources.list || true; \
+    sed -i 's|http://security.ubuntu.com/ubuntu/|http://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' /etc/apt/sources.list || true; \
+    printf '%s\n' \
+      'Acquire::Retries "8";' \
+      'Acquire::http::Timeout "60";' \
+      'Acquire::https::Timeout "60";' \
+      'Acquire::http::Proxy "false";' \
+      'Acquire::https::Proxy "false";' \
+      > /etc/apt/apt.conf.d/80-retries; \
     apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential \

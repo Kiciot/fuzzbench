@@ -13,11 +13,31 @@ ENV http_proxy=$HTTP_PROXY
 ENV https_proxy=$HTTPS_PROXY
 ENV no_proxy=$NO_PROXY
 
-RUN echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries && \
+RUN set -eux; \
+    sed -i 's|http://archive.ubuntu.com/ubuntu/|http://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' /etc/apt/sources.list || true; \
+    sed -i 's|http://security.ubuntu.com/ubuntu/|http://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' /etc/apt/sources.list || true; \
+    printf '%s\n' \
+      'Acquire::Retries "8";' \
+      'Acquire::http::Timeout "60";' \
+      'Acquire::https::Timeout "60";' \
+      'Acquire::http::Proxy "false";' \
+      'Acquire::https::Proxy "false";' \
+      > /etc/apt/apt.conf.d/80-retries; \
     apt-get update && \
     apt-get install -y --no-install-recommends \
-        build-essential python3-dev python3-setuptools automake cmake git flex bison \
-        libglib2.0-dev libpixman-1-dev cargo libgtk-3-dev ninja-build \
+        build-essential \
+        python3-dev \
+        python3-setuptools \
+        automake \
+        cmake \
+        git \
+        flex \
+        bison \
+        libglib2.0-dev \
+        libpixman-1-dev \
+        cargo \
+        libgtk-3-dev \
+        ninja-build \
         gcc-$(gcc --version|head -n1|sed 's/\..*//'|sed 's/.* //')-plugin-dev \
         libstdc++-$(gcc --version|head -n1|sed 's/\..*//'|sed 's/.* //')-dev && \
     rm -rf /var/lib/apt/lists/*
