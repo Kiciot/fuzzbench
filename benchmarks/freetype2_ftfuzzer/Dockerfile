@@ -78,7 +78,7 @@ RUN set -eux; \
     '  rm -rf "$dir" && mkdir -p "$dir"' \
     '  git init "$dir" >/dev/null' \
     '  git -C "$dir" remote add origin "$url" >/dev/null' \
-    '  if git -C "$dir" fetch --depth 1 --filter=blob:none origin "$ref"; then' \
+    '  if git -C "$dir" fetch --depth 1 origin "$ref"; then' \
     '    git -C "$dir" checkout -f FETCH_HEAD >/dev/null' \
     '    exit 0' \
     '  fi' \
