@@ -40,10 +40,11 @@ RUN apt-get update && \
         gcc-$(gcc --version|head -n1|sed 's/\..*//'|sed 's/.* //')-plugin-dev \
         libstdc++-$(gcc --version|head -n1|sed 's/\..*//'|sed 's/.* //')-dev
 
-# Download T-Scheduler
-RUN git config --global http.proxy http://172.17.0.1:7890
-RUN git config --global https.proxy http://172.17.0.1:7890
 RUN git clone -b evaluation-experiment https://github.com/asiaccs2024-t-scheduler/t-scheduler /afl
+
+# Patch broken references in evaluation-experiment without modifying upstream repo.
+RUN cd /afl && \
+    sed -i 's/afl->rl_params->update_overhead_sec/0.0/g' src/afl-fuzz.c
 
 # Build without Python support as we don't need it.
 # Set AFL_NO_X86 to skip flaky tests.
