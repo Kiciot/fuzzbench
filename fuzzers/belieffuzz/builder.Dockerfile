@@ -1,17 +1,4 @@
 # Copyright 2020 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 ARG parent_image
 FROM $parent_image
 
@@ -25,6 +12,7 @@ ENV no_proxy=$NO_PROXY
 RUN apt-get update && \
     apt-get install -y \
         build-essential \
+        clang \
         python3-dev \
         python3-setuptools \
         automake \
@@ -36,19 +24,17 @@ RUN apt-get update && \
         libpixman-1-dev \
         cargo \
         libgtk-3-dev \
-        ninja-build \
-        gcc-$(gcc --version | head -n1 | sed 's/\..*//' | sed 's/.* //')-plugin-dev \
-        libstdc++-$(gcc --version | head -n1 | sed 's/\..*//' | sed 's/.* //')-dev
+        ninja-build
 
-# Download aflplusplus-hier
-RUN git config --global http.proxy http://172.17.0.1:7890 && \
-    git config --global https.proxy http://172.17.0.1:7890 && \
-    git clone --depth 1 https://github.com/bitsecurerlab/aflplusplus-hier /afl
+# 下载 BeliefFuzz
+RUN git config --global http.proxy $HTTP_PROXY && \
+    git config --global https.proxy $HTTPS_PROXY && \
+    git clone --depth 1 https://github.com/5hadowblad3/Belieffuzz /afl
 
-# Build without Python support as we don't need it.
-# Set AFL_NO_X86 to skip flaky tests.
+# 编译
 RUN cd /afl && \
     unset CFLAGS CXXFLAGS && \
-    export CC=clang AFL_NO_X86=1 && \
-    PYTHON_INCLUDE=/ make && \
-    cp utils/aflpp_driver/libAFLDriver.a /
+    make -j$(nproc)
+
+# 拷贝 fuzzer 二进制到 OUT（关键）
+RUN cp /afl/afl-fuzz /out/afl-fuzz
