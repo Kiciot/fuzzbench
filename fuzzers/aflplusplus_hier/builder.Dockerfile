@@ -42,9 +42,7 @@ RUN apt-get update && \
 RUN git config --global http.proxy "${HTTP_PROXY}" && \
     git config --global https.proxy "${HTTPS_PROXY}"
 
-# 按你的 hier 仓库地址/分支替换
-RUN git clone https://github.com/bitsecurerlab/aflplusplus-hier /afl && \
-    cd /afl && \
+RUN git clone https://github.com/bitsecurerlab/aflplusplus-hier /afl
 
 ENV CC=clang
 ENV CXX=clang++
