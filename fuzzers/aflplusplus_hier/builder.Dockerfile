@@ -1,19 +1,10 @@
 # Copyright 2020 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
 # http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 ARG parent_image
-FROM $parent_image
+FROM ${parent_image}
 
 ENV HTTP_PROXY=http://172.17.0.1:7890
 ENV HTTPS_PROXY=http://172.17.0.1:7890
@@ -22,35 +13,52 @@ ENV http_proxy=$HTTP_PROXY
 ENV https_proxy=$HTTPS_PROXY
 ENV no_proxy=$NO_PROXY
 
+SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
+
 RUN apt-get update && \
-    apt-get install -y \
-        build-essential \
-        python3-dev \
-        python3-setuptools \
-        automake \
-        cmake \
-        git \
-        flex \
-        bison \
-        libglib2.0-dev \
-        libpixman-1-dev \
-        cargo \
-        libgtk-3-dev \
-        wget
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+      build-essential \
+      clang \
+      llvm \
+      llvm-dev \
+      libc++-dev \
+      libc++abi-dev \
+      python3-dev \
+      python3-setuptools \
+      automake \
+      cmake \
+      git \
+      flex \
+      bison \
+      libglib2.0-dev \
+      libpixman-1-dev \
+      cargo \
+      libgtk-3-dev \
+      ninja-build \
+      gcc-$(gcc --version | head -n1 | sed 's/\..*//' | sed 's/.* //')-plugin-dev \
+      libstdc++-$(gcc --version | head -n1 | sed 's/\..*//' | sed 's/.* //')-dev && \
+    rm -rf /var/lib/apt/lists/*
 
-# Download EcoFuzz.
-RUN git config --global http.proxy http://172.17.0.1:7890
-RUN git config --global https.proxy http://172.17.0.1:7890
-RUN git clone --depth 1 https://github.com/MoonLight-SteinsGate/EcoFuzz.git /ecofuzz-src && \
-    mkdir -p /afl && \
-    cp -a /ecofuzz-src/EcoFuzz/. /afl/
+RUN git config --global http.proxy "${HTTP_PROXY}" && \
+    git config --global https.proxy "${HTTPS_PROXY}"
 
-# Build EcoFuzz.
+# 按你的 hier 仓库地址/分支替换
+RUN git clone https://github.com/bitsecurerlab/aflplusplus-hier /afl && \
+    cd /afl && \
+    git checkout <BRANCH_OR_COMMIT>
+
+ENV CC=clang
+ENV CXX=clang++
+ENV AFL_SKIP_CPUFREQ=1
+ENV AFL_NO_X86=1
+
 RUN cd /afl && \
-    CFLAGS= CXXFLAGS= AFL_NO_X86=1 make
+    unset CFLAGS CXXFLAGS CPPFLAGS && \
+    make clean || true && \
+    make -j"$(nproc)" && \
+    cp utils/aflpp_driver/libAFLDriver.a /
 
-# Use afl_driver.cpp from LLVM as our fuzzing library.
-RUN wget https://raw.githubusercontent.com/llvm/llvm-project/5feb80e748924606531ba28c97fe65145c65372e/compiler-rt/lib/fuzzer/afl/afl_driver.cpp -O /afl/afl_driver.cpp && \
-    clang -Wno-pointer-sign -c /afl/llvm_mode/afl-llvm-rt.o.c -I/afl && \
-    clang++ -stdlib=libc++ -std=c++11 -O2 -c /afl/afl_driver.cpp && \
-    ar r /libAFL.a *.o
+# 可选：快速验一下 wrapper 是否真的能工作
+RUN echo 'int main(void){return 0;}' > /tmp/test.c && \
+    /afl/afl-clang-fast /tmp/test.c -o /tmp/test_bin && \
+    /tmp/test_bin

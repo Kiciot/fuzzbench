@@ -1,0 +1,1 @@
+Entropic is a libFuzzer-based power scheduling strategy that prioritizes inputs based on entropy-inspired feedback signals.
