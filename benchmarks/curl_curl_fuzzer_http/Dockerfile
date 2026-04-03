@@ -61,6 +61,22 @@ RUN set -eux; \
   git -C /src/curl_fuzzer checkout dd486c1e5910e722e43c451d4de928ac80f5967d; \
   git_retry git clone --depth 1 --single-branch https://github.com/curl/curl.git /src/curl
 
+# --- Proactive Network Armor (防黑盒脚本背刺) ---
+RUN set -eux; \
+  sed -i 's|http://archive.ubuntu.com/ubuntu/|http://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' /etc/apt/sources.list || true; \
+  sed -i 's|http://security.ubuntu.com/ubuntu/|http://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' /etc/apt/sources.list || true; \
+  printf '%s\n' \
+    'Acquire::Retries "8";' \
+    'Acquire::http::Proxy "false";' \
+    'Acquire::https::Proxy "false";' \
+    > /etc/apt/apt.conf.d/80-retries; \
+  mv /usr/bin/wget /usr/bin/wget_orig || true; \
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'exec /usr/bin/wget_orig --no-check-certificate --tries=10 "$@"' \
+    > /usr/bin/wget; \
+  chmod +x /usr/bin/wget
+
 # Use curl-fuzzer's scripts to get latest dependencies.
 # This step later triggers OpenSSL clone in build.sh scripts; it will inherit git configs above.
 RUN set -eux; \
