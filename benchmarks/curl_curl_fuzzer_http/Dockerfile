@@ -80,8 +80,10 @@ RUN set -eux; \
 # Use curl-fuzzer's scripts to get latest dependencies.
 # This step later triggers OpenSSL clone in build.sh scripts; it will inherit git configs above.
 RUN set -eux; \
-    # 【新增绝杀技】强行修改官方黑盒脚本，把所有 git clone 替换为浅克隆，防 30 分钟超时断流
+    # 1. 把所有 git clone 替换为浅克隆，防 30 分钟超时断流
     find $SRC/curl_fuzzer/scripts -name "*.sh" -exec sed -i 's/git clone/git clone --depth 1/g' {} +; \
+    # 2. 【新增这行】把过时的 OpenSSL 1.0.2 替换为符合要求的 3.0.12 版本
+    find $SRC/curl_fuzzer/scripts -name "*.sh" -exec sed -i 's/OpenSSL_1_0_2m/openssl-3.0.12/g' {} +; \
     # 增加调试输出
     /bin/bash -x "$SRC/curl_fuzzer/scripts/ossfuzzdeps.sh"
 
