@@ -31,7 +31,6 @@ RUN set -eux; \
   git config --global http.maxRequests 4
 
 # A small helper for retrying git operations in Docker build.
-# Fixed parser issue by using printf instead of EOF heredoc.
 RUN set -eux; \
   printf '%s\n' \
     '#!/usr/bin/env bash' \
@@ -55,7 +54,6 @@ RUN set -eux; \
   chmod +x /usr/local/bin/git_retry
 
 # Curl will be checked out to the commit hash specified in benchmark.yaml.
-# Use retry for the initial clones too (these are also subject to transient network).
 RUN set -eux; \
   git_retry git clone https://github.com/curl/curl-fuzzer /src/curl_fuzzer; \
   git -C /src/curl_fuzzer checkout dd486c1e5910e722e43c451d4de928ac80f5967d; \
@@ -77,12 +75,22 @@ RUN set -eux; \
     > /usr/bin/wget; \
   chmod +x /usr/bin/wget
 
-# Use curl-fuzzer's scripts to get latest dependencies.
-# This step later triggers OpenSSL clone in build.sh scripts; it will inherit git configs above.
+# --- 终极逃课：手动预下载 OpenSSL 源码，绕过 Git 克隆 ---
 RUN set -eux; \
-    # 1. 把所有 git clone 替换为浅克隆，防 30 分钟超时断流
+  wget -O openssl.tar.gz https://github.com/openssl/openssl/archive/refs/tags/openssl-3.0.12.tar.gz; \
+  mkdir -p /src/openssl; \
+  tar -xzf openssl.tar.gz -C /src/openssl --strip-components=1; \
+  rm openssl.tar.gz; \
+  # 伪造一个 git 仓库，以防后续的某些脚本执行 git rev-parse \
+  cd /src/openssl; \
+  git init; \
+  git config user.email "test@example.com"; \
+  git config user.name "Test"; \
+  git commit --allow-empty -m "dummy commit"
+
+# Use curl-fuzzer's scripts to get latest dependencies.
+RUN set -eux; \
     find $SRC/curl_fuzzer/scripts -name "*.sh" -exec sed -i 's/git clone/git clone --depth 1/g' {} +; \
-    # 2. 【新增这行】把过时的 OpenSSL 1.0.2 替换为符合要求的 3.0.12 版本
     find $SRC/curl_fuzzer/scripts -name "*.sh" -exec sed -i 's/OpenSSL_1_0_2m/openssl-3.0.12/g' {} +; \
     # 增加调试输出
     /bin/bash -x "$SRC/curl_fuzzer/scripts/ossfuzzdeps.sh"
