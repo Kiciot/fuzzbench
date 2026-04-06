@@ -100,8 +100,10 @@ WORKDIR $SRC/curl_fuzzer
 # Keep build.sh as-is (but it will benefit from global git settings).
 COPY build.sh $SRC/
 
-# --- 修复 Coverage 链接报错核心逻辑 ---
-# 在拷贝完 build.sh 后，利用 sed 命令强行向 OpenSSL 的配置指令中注入 no-tests
+# --- 修复 Coverage 链接报错核心逻辑 (暴力注入版) ---
+# 扫描 $SRC 下所有 shell 脚本，只要碰到配置 OpenSSL 的地方，强行塞入 no-tests 和 no-fuzz
 RUN set -eux; \
-    sed -i 's|\./config |\./config no-tests |g' $SRC/build.sh || true; \
-    sed -i 's|\./Configure |\./Configure no-tests |g' $SRC/build.sh || true
+    find $SRC -type f -name "*.sh" -exec sed -i 's/\.\/config /\.\/config no-tests no-fuzz /g' {} + || true; \
+    find $SRC -type f -name "*.sh" -exec sed -i 's/\.\/Configure /\.\/Configure no-tests no-fuzz /g' {} + || true; \
+    # 增加双重保险：利用 --prefix 作为锚点强行注入
+    find $SRC -type f -name "*.sh" -exec sed -i 's/--prefix/no-tests no-fuzz --prefix/g' {} + || true
