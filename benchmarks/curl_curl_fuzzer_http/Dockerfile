@@ -100,9 +100,7 @@ WORKDIR $SRC/curl_fuzzer
 # Keep build.sh as-is (but it will benefit from global git settings).
 COPY build.sh $SRC/
 
-# --- 修复 Coverage 链接报错核心逻辑 (精准拔除版) ---
+# --- 修复 Coverage 链接报错核心逻辑 (精确狙击版) ---
 RUN set -eux; \
-    # 1. 拔除 curl_fuzzer 脚本里硬编码的 enable-fuzz-libfuzzer，防止 OpenSSL 强制编译自带的 Fuzzer
-    find $SRC -type f -name "*.sh" -exec sed -i 's/enable-fuzz-libfuzzer//g' {} + || true; \
-    # 2. 仅注入 no-tests 避免编译 test/ 目录，且只用 --prefix 作为锚点替换一次，防止重复
-    find $SRC -type f -name "*.sh" -exec sed -i 's/--prefix/no-tests --prefix/g' {} + || true
+    # 直接精准定位到 OpenSSL 的安装脚本，把捣乱的 enable-fuzz-libfuzzer 替换成救命的 no-tests
+    sed -i 's/enable-fuzz-libfuzzer/no-tests/g' $SRC/curl_fuzzer/scripts/install_openssl.sh || true
