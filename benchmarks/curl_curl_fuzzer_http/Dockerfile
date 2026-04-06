@@ -99,3 +99,9 @@ WORKDIR $SRC/curl_fuzzer
 
 # Keep build.sh as-is (but it will benefit from global git settings).
 COPY build.sh $SRC/
+
+# --- 修复 Coverage 链接报错核心逻辑 ---
+# 在拷贝完 build.sh 后，利用 sed 命令强行向 OpenSSL 的配置指令中注入 no-tests
+RUN set -eux; \
+    sed -i 's|\./config |\./config no-tests |g' $SRC/build.sh || true; \
+    sed -i 's|\./Configure |\./Configure no-tests |g' $SRC/build.sh || true
