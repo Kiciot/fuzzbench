@@ -39,9 +39,13 @@ RUN set -eux; \
         libstdc++-9-dev libstdc++-9-dev:i386 nasm subversion; \
     rm -rf /var/lib/apt/lists/*
 
-# 4) git 继续走代理（如果你需要）
-RUN git config --global http.proxy "${HTTP_PROXY}" \
- && git config --global https.proxy "${HTTPS_PROXY}"
+# 4) git 继续走代理（并加上防巨型仓库断流的抗压配置）
+RUN set -eux; \
+    git config --global http.proxy "${HTTP_PROXY}"; \
+    git config --global https.proxy "${HTTPS_PROXY}"; \
+    git config --global http.postBuffer 524288000; \
+    git config --global core.compression 0; \
+    git config --global http.version HTTP/1.1
 
 RUN git clone https://github.com/cisco/openh264.git
 
