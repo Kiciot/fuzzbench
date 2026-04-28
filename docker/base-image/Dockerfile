@@ -26,9 +26,10 @@ ENV HTTP_PROXY=${HTTP_PROXY} \
     USE_PROXY=${USE_PROXY} \
     APT_USE_PROXY=${APT_USE_PROXY}
 
-# 默认改成 HTTPS 国内镜像，降低代理抖动影响
-ARG UBUNTU_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/ubuntu
-ARG UBUNTU_SECURITY_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/ubuntu
+# 这里故意用 HTTP 镜像做 bootstrap。
+# 原因：ca-certificates 尚未安装前，直接切 HTTPS apt 源会证书校验失败。
+ARG UBUNTU_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/ubuntu
+ARG UBUNTU_SECURITY_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/ubuntu
 
 # Python 3.10.8 is not the default version in Ubuntu 20.04 (Focal Fossa).
 ENV PYTHON_VERSION=3.10.8
