@@ -12,8 +12,10 @@ ARG HTTP_PROXY=http://172.17.0.1:7890
 ARG HTTPS_PROXY=http://172.17.0.1:7890
 ARG NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
 
-# 代理总开关：代理不稳定时可直接 --build-arg USE_PROXY=0
+# 通用下载代理开关（给 curl / pip 等）
 ARG USE_PROXY=1
+# apt 专用代理开关：1=走代理，0=禁用 apt 代理
+ARG APT_USE_PROXY=1
 
 ENV HTTP_PROXY=${HTTP_PROXY} \
     HTTPS_PROXY=${HTTPS_PROXY} \
@@ -21,11 +23,12 @@ ENV HTTP_PROXY=${HTTP_PROXY} \
     http_proxy=${HTTP_PROXY} \
     https_proxy=${HTTPS_PROXY} \
     no_proxy=${NO_PROXY} \
-    USE_PROXY=${USE_PROXY}
+    USE_PROXY=${USE_PROXY} \
+    APT_USE_PROXY=${APT_USE_PROXY}
 
-# Optional: allow overriding Ubuntu mirror if your route makes some mirrors flaky.
-ARG UBUNTU_MIRROR=http://archive.ubuntu.com/ubuntu
-ARG UBUNTU_SECURITY_MIRROR=http://security.ubuntu.com/ubuntu
+# 默认改成 HTTPS 国内镜像，降低代理抖动影响
+ARG UBUNTU_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/ubuntu
+ARG UBUNTU_SECURITY_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/ubuntu
 
 # Python 3.10.8 is not the default version in Ubuntu 20.04 (Focal Fossa).
 ENV PYTHON_VERSION=3.10.8
@@ -35,12 +38,14 @@ ARG MAKE_JOBS=0
 ENV MAKE_JOBS=${MAKE_JOBS}
 
 # -----------------------------
-# APT robustness (retries/timeouts) + optional mirror replace
+# APT robustness + mirror replace
 # -----------------------------
 RUN set -eux; \
     if [ -f /etc/apt/sources.list ]; then \
       sed -i "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" /etc/apt/sources.list || true; \
       sed -i "s|http://security.ubuntu.com/ubuntu|${UBUNTU_SECURITY_MIRROR}|g" /etc/apt/sources.list || true; \
+      sed -i "s|https://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" /etc/apt/sources.list || true; \
+      sed -i "s|https://security.ubuntu.com/ubuntu|${UBUNTU_SECURITY_MIRROR}|g" /etc/apt/sources.list || true; \
     fi; \
     printf '%s\n' \
       'Acquire::Retries "8";' \
@@ -48,7 +53,15 @@ RUN set -eux; \
       'Acquire::https::Timeout "60";' \
       'Acquire::http::Pipeline-Depth "0";' \
       'Acquire::https::Pipeline-Depth "0";' \
-      > /etc/apt/apt.conf.d/80-retries
+      'Acquire::BrokenProxy "true";' \
+      'Acquire::ForceIPv4 "true";' \
+      > /etc/apt/apt.conf.d/80-retries; \
+    if [ "${APT_USE_PROXY}" = "0" ]; then \
+      printf '%s\n' \
+        'Acquire::http::Proxy "false";' \
+        'Acquire::https::Proxy "false";' \
+        > /etc/apt/apt.conf.d/81-proxy-off; \
+    fi
 
 # -----------------------------
 # Helper: robust apt install (no upgrade)
@@ -59,13 +72,16 @@ RUN set -eux; \
 'set -eu' \
 'i=1' \
 'while [ "$i" -le 8 ]; do' \
-'  apt-get update && \' \
-'  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" && \' \
-'  exit 0' \
+'  rm -rf /var/lib/apt/lists/partial || true' \
+'  mkdir -p /var/lib/apt/lists/partial' \
+'  if apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --fix-missing "$@"; then' \
+'    exit 0' \
+'  fi' \
 '  echo "apt-get install failed ($i/8): $*" >&2' \
+'  apt-get clean || true' \
+'  rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/partial/* /var/cache/apt/pkgcache.bin /var/cache/apt/srcpkgcache.bin || true' \
 '  i=$((i+1))' \
 '  sleep 5' \
-'  apt-get update --fix-missing || true' \
 'done' \
 'echo "apt-get install permanently failed: $*" >&2' \
 'exit 1' \
@@ -73,23 +89,29 @@ RUN set -eux; \
     chmod +x /usr/local/bin/_apt_install
 
 # -----------------------------
-# Base deps (curl first; ca-certificates first)
+# Base deps (split into stages to reduce retry blast radius)
 # -----------------------------
 RUN set -eux; \
     /usr/local/bin/_apt_install \
       ca-certificates \
       curl \
       xz-utils \
-      build-essential \
+      apt-transport-https \
+      gnupg \
+      rsync
+
+RUN set -eux; \
+    /usr/local/bin/_apt_install \
+      build-essential
+
+RUN set -eux; \
+    /usr/local/bin/_apt_install \
       zlib1g-dev \
       libssl-dev \
       libffi-dev \
       libsqlite3-dev \
       libbz2-dev \
       liblzma-dev \
-      gnupg \
-      rsync \
-      apt-transport-https \
     ; \
     rm -rf /var/lib/apt/lists/*
 
@@ -110,20 +132,12 @@ RUN set -eux; \
 'try_one() {' \
 '  url="$1"' \
 '  if [ "${USE_PROXY:-1}" = "1" ]; then' \
-'    if curl -fL \' \
-'        --retry 8 --retry-connrefused --retry-delay 5 --retry-max-time 300 \' \
-'        --connect-timeout 20 --max-time 600 \' \
-'        -o "$out" "$url"; then' \
+'    if curl -fL --retry 8 --retry-connrefused --retry-delay 5 --retry-max-time 300 --connect-timeout 20 --max-time 600 -o "$out" "$url"; then' \
 '      return 0' \
 '    fi' \
 '    echo "download failed via proxy: $url" >&2' \
 '  fi' \
-'' \
-'  if env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \' \
-'       curl -fL \' \
-'        --retry 8 --retry-connrefused --retry-delay 5 --retry-max-time 300 \' \
-'        --connect-timeout 20 --max-time 600 \' \
-'        -o "$out" "$url"; then' \
+'  if env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY curl -fL --retry 8 --retry-connrefused --retry-delay 5 --retry-max-time 300 --connect-timeout 20 --max-time 600 -o "$out" "$url"; then' \
 '    return 0' \
 '  fi' \
 '  echo "download failed via direct: $url" >&2' \
@@ -177,7 +191,7 @@ RUN set -eux; \
 # -----------------------------
 COPY ./requirements.txt /tmp/requirements.txt
 RUN set -eux; \
-    pip install -r /tmp/requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple; \
+    pip install --retries 8 --timeout 120 -r /tmp/requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple; \
     rm -f /tmp/requirements.txt
 
 # -----------------------------
