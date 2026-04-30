@@ -59,11 +59,12 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*
 
 # -----------------------------
-# Git robustness (proxy + low-speed guard)
+# Git robustness (proxy + low-speed guard + Disable SSL Verify)
 # -----------------------------
 RUN set -eux; \
     git config --global http.proxy "${HTTP_PROXY}"; \
     git config --global https.proxy "${HTTPS_PROXY}"; \
+    git config --global http.sslVerify false; \
     git config --global http.lowSpeedLimit 1000; \
     git config --global http.lowSpeedTime 60; \
     git config --global http.postBuffer 524288000; \
