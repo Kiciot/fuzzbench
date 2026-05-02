@@ -138,7 +138,7 @@ RUN set -eux; \
 '    fi' \
 '    echo "download failed via proxy: $url" >&2' \
 '  fi' \
-'  if env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY curl -fL --retry 8 --retry-connrefused --retry-delay 5 --retry-max-time 300 --connect-timeout 20 --max-time 600 -o "$out" "$url"; then' \
+'  if env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY curl -fL --retry 8 --retry-connrefused --retry-delay 5 --retry-max-time 300 --connect-timeout 20 --max-time 600 -o "$out" "$url"; then' \
 '    return 0' \
 '  fi' \
 '  echo "download failed via direct: $url" >&2' \
@@ -189,10 +189,21 @@ RUN set -eux; \
 
 # -----------------------------
 # Install common python dependencies
+#
+# Important:
+# pip uses the Tsinghua PyPI mirror here, so do NOT route it through the
+# unstable local proxy. Otherwise pip may fail with ProxyError / TLS handshake
+# timeout even though the mirror itself is reachable.
 # -----------------------------
 COPY ./requirements.txt /tmp/requirements.txt
 RUN set -eux; \
-    pip install --retries 8 --timeout 120 -r /tmp/requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple; \
+    env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy -u ALL_PROXY -u all_proxy \
+      python3 -m pip install \
+        --retries 8 \
+        --timeout 120 \
+        -r /tmp/requirements.txt \
+        -i https://pypi.tuna.tsinghua.edu.cn/simple \
+        --trusted-host pypi.tuna.tsinghua.edu.cn; \
     rm -f /tmp/requirements.txt
 
 # -----------------------------
