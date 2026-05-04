@@ -54,7 +54,7 @@ RUN git config --global http.proxy http://172.17.0.1:7890 && \
 
 # 5. 带重试机制的 Git Clone (最多尝试 3 次)，防止偶发的 early EOF
 RUN for i in 1 2 3; do \
-      git clone https://github.com/Kiciot/AFLplusplus /afl && break || \
+      git clone --branch full https://github.com/Kiciot/AFLplusplus /afl && break || \
       (echo "Clone failed, retrying in 5s..." && sleep 5); \
     done && \
     cd /afl && \

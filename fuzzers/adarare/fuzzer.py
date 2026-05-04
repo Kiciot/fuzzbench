@@ -20,6 +20,34 @@ import shutil
 from fuzzers.afl import fuzzer as afl_fuzzer
 from fuzzers import utils
 
+ADARARE_ARTIFACT_NAMES = (
+    '.adarare_bandit.csv',
+    '.adarare_config.json',
+    '.adarare_verify.log',
+    '.adarare_dbg.csv',
+)
+
+
+def archive_adarare_artifacts(output_corpus):
+    """Copy AdaRare telemetry into default/ with non-hidden names."""
+    default_dir = os.path.join(output_corpus, 'default')
+    os.makedirs(default_dir, exist_ok=True)
+
+    for source_dir in (output_corpus, default_dir):
+        if not os.path.isdir(source_dir):
+            continue
+
+        for name in ADARARE_ARTIFACT_NAMES:
+            source = os.path.join(source_dir, name)
+            if not os.path.isfile(source):
+                continue
+
+            target_name = name[1:] if name.startswith('.') else name
+            target = os.path.join(default_dir, target_name)
+            if os.path.abspath(source) != os.path.abspath(target):
+                shutil.copy2(source, target)
+
+
 
 def get_cmplog_build_directory(target_directory):
     """Return path to CmpLog target directory."""
@@ -256,6 +284,12 @@ def fuzz(input_corpus,
     # os.environ['AFL_ALIGNED_ALLOC'] = '1' # align malloc to max_align_t
     # os.environ['AFL_PRELOAD'] = '/afl/libdislocator.so'
 
+    # AFL++ full branch only calls bandit_init() when AFL_BANDIT is enabled.
+    os.environ['AFL_BANDIT'] = '1'
+    os.environ.setdefault('AFL_BANDIT_REWARD', 'rarity_mass')
+    os.environ.setdefault('AFL_BANDIT_REWARD_FORMULA', 'rate_cost')
+    os.environ.setdefault('AFL_BANDIT_WINDOW_MS', '5000')
+
     # Pin AdaRare configuration for reproducibility.
     os.environ.setdefault('AFL_ADARARE_CONTEXTUAL', '1')
     os.environ.setdefault('AFL_ADARARE_ALPHA', '0.5')
@@ -294,7 +328,10 @@ def fuzz(input_corpus,
         if 'ADDITIONAL_ARGS' in os.environ:
             flags += os.environ['ADDITIONAL_ARGS'].split(' ')
 
-    afl_fuzzer.run_afl_fuzz(input_corpus,
-                            output_corpus,
-                            target_binary,
-                            additional_flags=flags)
+    try:
+        afl_fuzzer.run_afl_fuzz(input_corpus,
+                                output_corpus,
+                                target_binary,
+                                additional_flags=flags)
+    finally:
+        archive_adarare_artifacts(output_corpus)

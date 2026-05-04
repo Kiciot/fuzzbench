@@ -28,3 +28,5 @@ ENV AFL_SKIP_CPUFREQ=1
 ENV AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1
 ENV AFL_TESTCACHE_SIZE=2
 # RUN apt-get update && apt-get upgrade && apt install -y unzip git gdb joe
+# Enable AdaRare/Bandit scheduler inside afl-fuzz.
+ENV AFL_BANDIT=1
