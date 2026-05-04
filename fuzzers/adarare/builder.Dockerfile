@@ -58,7 +58,7 @@ RUN for i in 1 2 3; do \
       (echo "Clone failed, retrying in 5s..." && sleep 5); \
     done && \
     cd /afl && \
-    git checkout f77d7c3e416f11b18a6da00b87c420b16ced530d
+    git checkout 6c63924d27285ca9aaf8677158e125e46307f6f5
 
 # 6. ±‡“ÎππΩ®
 RUN cd /afl && \
