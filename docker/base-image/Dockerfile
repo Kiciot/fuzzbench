@@ -6,35 +6,37 @@ FROM ubuntu:focal
 ENV DEBIAN_FRONTEND=noninteractive
 
 # -----------------------------
-# Proxy (build-time configurable)
+# Proxy policy
 # -----------------------------
-ARG HTTP_PROXY=http://172.17.0.1:7890
-ARG HTTPS_PROXY=http://172.17.0.1:7890
+# 当前机器测试结果：
+# - 宿主机 pip 直连 PyPI 快；
+# - Docker daemon 直连 Docker Hub 正常；
+# - 127.0.0.1:7890 / 172.17.0.1:7890 会导致 TLS EOF 或 502。
+#
+# 因此 base-image 默认不使用代理。
+ARG HTTP_PROXY=
+ARG HTTPS_PROXY=
 ARG NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
 
-# 通用下载代理开关（给 curl / pip 等）
-ARG USE_PROXY=1
-# apt 专用代理开关：1=走代理，0=禁用 apt 代理
-ARG APT_USE_PROXY=1
+ARG USE_PROXY=0
+ARG APT_USE_PROXY=0
 
-ENV HTTP_PROXY=${HTTP_PROXY} \
-    HTTPS_PROXY=${HTTPS_PROXY} \
+ENV USE_PROXY=${USE_PROXY} \
+    APT_USE_PROXY=${APT_USE_PROXY} \
     NO_PROXY=${NO_PROXY} \
-    http_proxy=${HTTP_PROXY} \
-    https_proxy=${HTTPS_PROXY} \
-    no_proxy=${NO_PROXY} \
-    USE_PROXY=${USE_PROXY} \
-    APT_USE_PROXY=${APT_USE_PROXY}
+    no_proxy=${NO_PROXY}
 
-# 这里故意用 HTTP 镜像做 bootstrap。
-# 原因：ca-certificates 尚未安装前，直接切 HTTPS apt 源会证书校验失败。
+# -----------------------------
+# Ubuntu mirror
+# -----------------------------
+# 用 HTTP 源做 bootstrap，避免 ca-certificates 尚未安装时 HTTPS apt 源校验失败。
 ARG UBUNTU_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/ubuntu
 ARG UBUNTU_SECURITY_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/ubuntu
 
-# Python 3.10.8 is not the default version in Ubuntu 20.04 (Focal Fossa).
+# Python 3.10.8 is not the default version in Ubuntu 20.04.
 ENV PYTHON_VERSION=3.10.8
 
-# make 并行度可控：避免在小机器/CI 里把内存打爆
+# make 并行度可控，避免构建 Python 时内存打爆。
 ARG MAKE_JOBS=0
 ENV MAKE_JOBS=${MAKE_JOBS}
 
@@ -57,15 +59,13 @@ RUN set -eux; \
       'Acquire::BrokenProxy "true";' \
       'Acquire::ForceIPv4 "true";' \
       > /etc/apt/apt.conf.d/80-retries; \
-    if [ "${APT_USE_PROXY}" = "0" ]; then \
-      printf '%s\n' \
-        'Acquire::http::Proxy "false";' \
-        'Acquire::https::Proxy "false";' \
-        > /etc/apt/apt.conf.d/81-proxy-off; \
-    fi
+    printf '%s\n' \
+      'Acquire::http::Proxy "false";' \
+      'Acquire::https::Proxy "false";' \
+      > /etc/apt/apt.conf.d/81-proxy-off
 
 # -----------------------------
-# Helper: robust apt install (no upgrade)
+# Helper: robust apt install
 # -----------------------------
 RUN set -eux; \
     printf '%s\n' \
@@ -75,7 +75,7 @@ RUN set -eux; \
 'while [ "$i" -le 8 ]; do' \
 '  rm -rf /var/lib/apt/lists/partial || true' \
 '  mkdir -p /var/lib/apt/lists/partial' \
-'  if apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --fix-missing "$@"; then' \
+'  if env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy -u ALL_PROXY -u all_proxy apt-get update && env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy -u ALL_PROXY -u all_proxy DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --fix-missing "$@"; then' \
 '    exit 0' \
 '  fi' \
 '  echo "apt-get install failed ($i/8): $*" >&2' \
@@ -90,7 +90,7 @@ RUN set -eux; \
     chmod +x /usr/local/bin/_apt_install
 
 # -----------------------------
-# Base deps (split into stages to reduce retry blast radius)
+# Base deps
 # -----------------------------
 RUN set -eux; \
     /usr/local/bin/_apt_install \
@@ -112,12 +112,11 @@ RUN set -eux; \
       libffi-dev \
       libsqlite3-dev \
       libbz2-dev \
-      liblzma-dev \
-    ; \
+      liblzma-dev; \
     rm -rf /var/lib/apt/lists/*
 
 # -----------------------------
-# Helper: download-with-retry, proxy-first then direct fallback, multi-mirror
+# Helper: download with retry
 # usage: _curl_dl <url1> [url2] [url3] <out>
 # -----------------------------
 RUN set -eux; \
@@ -132,7 +131,7 @@ RUN set -eux; \
 '' \
 'try_one() {' \
 '  url="$1"' \
-'  if [ "${USE_PROXY:-1}" = "1" ]; then' \
+'  if [ "${USE_PROXY:-0}" = "1" ]; then' \
 '    if curl -fL --retry 8 --retry-connrefused --retry-delay 5 --retry-max-time 300 --connect-timeout 20 --max-time 600 -o "$out" "$url"; then' \
 '      return 0' \
 '    fi' \
@@ -158,13 +157,13 @@ RUN set -eux; \
 '  done' \
 'done' \
 '' \
-'echo "download permanently failed (all mirrors): $url1" >&2' \
+'echo "download permanently failed: $url1" >&2' \
 'exit 1' \
       > /usr/local/bin/_curl_dl; \
     chmod +x /usr/local/bin/_curl_dl
 
 # -----------------------------
-# Build & install Python (download with mirrors)
+# Build & install Python
 # -----------------------------
 RUN set -eux; \
     cd /tmp; \
@@ -188,12 +187,7 @@ RUN set -eux; \
     ln -sf /usr/local/bin/pip3 /usr/local/bin/pip
 
 # -----------------------------
-# Install common python dependencies
-#
-# Important:
-# pip uses the Tsinghua PyPI mirror here, so do NOT route it through the
-# unstable local proxy. Otherwise pip may fail with ProxyError / TLS handshake
-# timeout even though the mirror itself is reachable.
+# Install Python dependencies
 # -----------------------------
 COPY ./requirements.txt /tmp/requirements.txt
 RUN set -eux; \
@@ -201,23 +195,22 @@ RUN set -eux; \
       python3 -m pip install \
         --retries 8 \
         --timeout 120 \
+        --no-cache-dir \
+        --upgrade pip setuptools \
+        -i https://pypi.org/simple; \
+    env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy -u ALL_PROXY -u all_proxy \
+      python3 -m pip install \
+        --retries 8 \
+        --timeout 120 \
+        --no-cache-dir \
         -r /tmp/requirements.txt \
-        -i https://pypi.tuna.tsinghua.edu.cn/simple \
-        --trusted-host pypi.tuna.tsinghua.edu.cn; \
+        -i https://pypi.org/simple; \
     rm -f /tmp/requirements.txt
 
 # -----------------------------
-# Install google-cloud-cli (use keyring; avoid apt-key)
+# Local FuzzBench build
 # -----------------------------
+# 本地实验不需要 google-cloud-cli。
+# 之前失败正是卡在 packages.cloud.google.com / google-cloud-cli 这一层。
 RUN set -eux; \
-    /usr/local/bin/_curl_dl \
-      "https://packages.cloud.google.com/apt/doc/apt-key.gpg" \
-      "https://mirrors.cloud.google.com/apt/doc/apt-key.gpg" \
-      "" \
-      "/tmp/google-cloud.gpg"; \
-    gpg --dearmor -o /usr/share/keyrings/google-cloud.gpg /tmp/google-cloud.gpg; \
-    rm -f /tmp/google-cloud.gpg; \
-    echo "deb [signed-by=/usr/share/keyrings/google-cloud.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
-      > /etc/apt/sources.list.d/google-cloud-sdk.list; \
-    /usr/local/bin/_apt_install google-cloud-cli; \
-    rm -rf /var/lib/apt/lists/*
+    echo "Skipping google-cloud-cli installation for local FuzzBench build"
