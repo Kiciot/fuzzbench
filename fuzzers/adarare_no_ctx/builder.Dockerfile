@@ -6,16 +6,10 @@ ARG parent_image
 FROM $parent_image
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV HTTP_PROXY=http://172.17.0.1:7890
-ENV HTTPS_PROXY=http://172.17.0.1:7890
-ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
-ENV http_proxy=$HTTP_PROXY
-ENV https_proxy=$HTTPS_PROXY
-ENV no_proxy=$NO_PROXY
 
 RUN set -eux; \
-    sed -i 's|http://archive.ubuntu.com/ubuntu/|http://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' /etc/apt/sources.list || true; \
-    sed -i 's|http://security.ubuntu.com/ubuntu/|http://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' /etc/apt/sources.list || true; \
+    sed -i 's|http://archive.ubuntu.com/ubuntu/|http://mirrors.aliyun.com/ubuntu/|g' /etc/apt/sources.list || true; \
+    sed -i 's|http://security.ubuntu.com/ubuntu/|http://mirrors.aliyun.com/ubuntu/|g' /etc/apt/sources.list || true; \
     printf '%s\n' \
       'Acquire::Retries "8";' \
       'Acquire::http::Timeout "60";' \
@@ -42,16 +36,13 @@ RUN set -eux; \
         libstdc++-$(gcc --version|head -n1|sed 's/\..*//'|sed 's/.* //')-dev && \
     rm -rf /var/lib/apt/lists/*
 
-RUN git config --global http.proxy http://172.17.0.1:7890 && \
-    git config --global http.postBuffer 524288000 && \
-    git config --global core.compression 0
 
 RUN for i in 1 2 3; do \
       git clone https://github.com/Kiciot/AFLplusplus /afl && break || \
       (echo "Clone failed, retrying in 5s..." && sleep 5); \
     done && \
     cd /afl && \
-    git checkout fee6f2d0368a7b505d892368f4980ff4e6a5cd45
+    git checkout 9e4dd69a2c6fcb2a01f6edca92865347496269b0
 
 RUN cd /afl && \
     unset CFLAGS CXXFLAGS && \

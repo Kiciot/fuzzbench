@@ -42,7 +42,7 @@ RUN for i in 1 2 3; do \
       (echo "Clone failed, retrying in 5s..." && sleep 5); \
     done && \
     cd /afl && \
-    git checkout 1a5f9611b43e62342301862b230bd7b4f5c982a3
+    git checkout 5bb02fa6c173f10711daaeb7db394aadd61ca191
 
 RUN cd /afl && \
     unset CFLAGS CXXFLAGS && \

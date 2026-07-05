@@ -8,15 +8,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 # -----------------------------
 # Proxy policy
 # -----------------------------
-# 当前机器测试结果：
-# - 宿主机 pip 直连 PyPI 快；
-# - Docker daemon 直连 Docker Hub 正常；
-# - 127.0.0.1:7890 / 172.17.0.1:7890 会导致 TLS EOF 或 502。
-#
-# 因此 base-image 默认不使用代理。
+# Keep proxy values empty by default; pass build args explicitly if needed.
 ARG HTTP_PROXY=
 ARG HTTPS_PROXY=
-ARG NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
+ARG NO_PROXY=localhost,127.0.0.1,::1
 
 ARG USE_PROXY=0
 ARG APT_USE_PROXY=0
@@ -30,8 +25,8 @@ ENV USE_PROXY=${USE_PROXY} \
 # Ubuntu mirror
 # -----------------------------
 # 用 HTTP 源做 bootstrap，避免 ca-certificates 尚未安装时 HTTPS apt 源校验失败。
-ARG UBUNTU_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/ubuntu
-ARG UBUNTU_SECURITY_MIRROR=http://mirrors.tuna.tsinghua.edu.cn/ubuntu
+ARG UBUNTU_MIRROR=http://mirrors.aliyun.com/ubuntu
+ARG UBUNTU_SECURITY_MIRROR=http://mirrors.aliyun.com/ubuntu
 
 # Python 3.10.8 is not the default version in Ubuntu 20.04.
 ENV PYTHON_VERSION=3.10.8
@@ -168,8 +163,8 @@ RUN set -eux; \
 RUN set -eux; \
     cd /tmp; \
     /usr/local/bin/_curl_dl \
-      "https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tar.xz" \
       "https://registry.npmmirror.com/-/binary/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tar.xz" \
+      "https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tar.xz" \
       "" \
       "/tmp/Python-${PYTHON_VERSION}.tar.xz"; \
     tar -xf "/tmp/Python-${PYTHON_VERSION}.tar.xz" > /dev/null; \
@@ -197,14 +192,14 @@ RUN set -eux; \
         --timeout 120 \
         --no-cache-dir \
         --upgrade pip setuptools \
-        -i https://pypi.org/simple; \
+        -i https://mirrors.aliyun.com/pypi/simple; \
     env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy -u ALL_PROXY -u all_proxy \
       python3 -m pip install \
         --retries 8 \
         --timeout 120 \
         --no-cache-dir \
         -r /tmp/requirements.txt \
-        -i https://pypi.org/simple; \
+        -i https://mirrors.aliyun.com/pypi/simple; \
     rm -f /tmp/requirements.txt
 
 # -----------------------------

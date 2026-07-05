@@ -13,22 +13,11 @@ ARG benchmark
 ARG debug_builder
 
 # -----------------------------
-# 1) Proxy Configuration (build-time overridable)
+# 1) Build-time identity
 # -----------------------------
-ARG HTTP_PROXY=http://172.17.0.1:7890
-ARG HTTPS_PROXY=http://172.17.0.1:7890
-ARG NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
-ARG GIT_SSL_NO_VERIFY=1
-
 ENV FUZZER=$fuzzer \
     BENCHMARK=$benchmark \
     DEBUG_BUILDER=$debug_builder \
-    HTTP_PROXY=${HTTP_PROXY} \
-    HTTPS_PROXY=${HTTPS_PROXY} \
-    NO_PROXY=${NO_PROXY} \
-    http_proxy=${HTTP_PROXY} \
-    https_proxy=${HTTPS_PROXY} \
-    no_proxy=${NO_PROXY} \
     GIT_TERMINAL_PROMPT=0
 
 # -----------------------------
@@ -72,19 +61,14 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*
 
 # -----------------------------
-# 4) Git robustness (proxy + low speed + optional SSL verify off)
+# 4) Git robustness
 # -----------------------------
 RUN set -eux; \
-    git config --global http.proxy "${HTTP_PROXY}"; \
-    git config --global https.proxy "${HTTPS_PROXY}"; \
-    git config --global http.lowSpeedLimit 1000; \
-    git config --global http.lowSpeedTime 60; \
+    git config --global http.lowSpeedLimit 1; \
+    git config --global http.lowSpeedTime 600; \
     git config --global http.postBuffer 524288000; \
     git config --global core.compression 0; \
-    git config --global http.version HTTP/1.1; \
-    if [ "${GIT_SSL_NO_VERIFY}" = "1" ]; then \
-      git config --global http.sslVerify false; \
-    fi
+    git config --global http.version HTTP/1.1
 
 # -----------------------------
 # 5) Helper: robust download (curl first; fallback wget; curl flags are "old-curl safe")

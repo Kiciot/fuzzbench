@@ -1,22 +1,11 @@
 # AdaRare (No Context)
 
-AdaRare is a rarity-aware greybox fuzzing scheduler built on top of AFL++.
-This ablation variant disables the contextual/LinUCB scheduling component
-while keeping the rest of the AdaRare system intact.
+Paired ablation AdaRare FuzzBench variant.
 
-This FuzzBench integration pins AFL++ to the following AdaRare no-context commit:
+- FuzzBench variant: `adarare_no_ctx`
+- AFL++ repo: `https://github.com/Kiciot/AFLplusplus`
+- AFL++ pinned commit: `9e4dd69a2c6fcb2a01f6edca92865347496269b0`
+- Experiment group: `paired-ablation`
+- A6 delegated sharing: follows the pinned AFL++ ablation branch default behavior
 
-- `fee6f2d0368a7b505d892368f4980ff4e6a5cd45`
-
-Ablation intent:
-
-- Remove contextual feature-driven LinUCB scheduling
-- Preserve the remaining AdaRare mechanisms, including:
-  - reward shaping
-  - CmpLog reward feedback
-  - A6 meta-arm logic
-  - dictionary-related policy control
-
-Operationally, this variant is intended to approximate a non-contextual
-bandit baseline within the AdaRare framework, so that the contribution of
-context-aware scheduling can be isolated in FuzzBench experiments.
+No profile-control environment variables are set for this ablation variant.

@@ -1,22 +1,11 @@
 # AdaRare (No Cmp Reward)
 
-AdaRare is a rarity-aware greybox fuzzing scheduler built on top of AFL++.
-This ablation variant disables CmpLog-derived reward feedback into the
-bandit scheduler while preserving the rest of the AdaRare system.
+Paired ablation AdaRare FuzzBench variant.
 
-This FuzzBench integration pins AFL++ to the following AdaRare no-cmp commit:
+- FuzzBench variant: `adarare_no_cmp`
+- AFL++ repo: `https://github.com/Kiciot/AFLplusplus`
+- AFL++ pinned commit: `1a5f9611b43e62342301862b230bd7b4f5c982a3`
+- Experiment group: `paired-ablation`
+- A6 delegated sharing: follows the pinned AFL++ ablation branch default behavior
 
-- `b4edae3bb73849d3ada60faead85392e1fd0415a`
-
-Ablation intent:
-
-- Remove cmp-progress reward injection into AdaRare's reward pipeline
-- Keep the remaining AdaRare mechanisms active, including:
-  - contextual/LinUCB scheduling
-  - rarity- and coverage-aware reward shaping
-  - A6 meta-arm and off-policy weighting
-  - standard cmplog/redqueen execution paths
-
-This variant is designed to isolate the contribution of continuous cmp-based
-reward feedback, without turning off AFL++'s underlying cmplog-related
-execution support itself.
+No profile-control environment variables are set for this ablation variant.
