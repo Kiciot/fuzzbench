@@ -120,6 +120,7 @@ def get_rules_for_image(name, image):
     section += '\tdocker build \\\n'
     section += '\t--tag ' + os.path.join(BASE_TAG, image['tag']) + ' \\\n'
     section += '\t--build-arg BUILDKIT_INLINE_CACHE=1 \\\n'
+    section += '\t$(ADARARE_DOCKER_BUILD_ARGS) \\\n'
     section += ('\t--cache-from ' + os.path.join(BASE_TAG, image['tag']) +
                 ' \\\n')
 
@@ -155,7 +156,11 @@ def generate_makefile():
     benchmarks = benchmark_utils.get_all_benchmarks()
     buildable_images = docker_images.get_images_to_build(fuzzers, benchmarks)
 
-    makefile = 'export DOCKER_BUILDKIT := 1\n\n'
+    makefile = 'export DOCKER_BUILDKIT := 1\n'
+    makefile += 'UBUNTU_APT_MIRROR ?=\n'
+    makefile += 'UBUNTU_SECURITY_APT_MIRROR ?=\n'
+    makefile += ('ADARARE_DOCKER_BUILD_ARGS ?= --build-arg UBUNTU_APT_MIRROR=$(UBUNTU_APT_MIRROR) '
+                 '--build-arg UBUNTU_SECURITY_APT_MIRROR=$(UBUNTU_SECURITY_APT_MIRROR)\n\n')
 
     # Print oss-fuzz benchmarks property variables.
     makefile += _get_benchmark_fuzz_target(benchmarks)

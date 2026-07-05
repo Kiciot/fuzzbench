@@ -4,11 +4,14 @@
 
 FROM gcr.io/oss-fuzz-base/base-builder@sha256:87ca1e9e19235e731fac8de8d1892ebe8d55caf18e7aa131346fc582a2034fdd
 
-ARG HTTP_PROXY="http://172.17.0.1:7890"
-ARG HTTPS_PROXY="http://172.17.0.1:7890"
-ARG NO_PROXY="localhost,127.0.0.1,::1,172.17.0.0/16"
+ARG HTTP_PROXY=
+ARG HTTPS_PROXY=
+ARG NO_PROXY=localhost,127.0.0.1,::1
+ARG UBUNTU_APT_MIRROR=
+ARG UBUNTU_SECURITY_APT_MIRROR=
+ARG GIT_CLONE_RETRIES=6
+ARG PROJ_COMMIT=a7482d3775f2e346f3680363dd2d641add3e68b2
 
-# Give git/curl the proxy; force apt to ignore proxy via env -u (below).
 ENV HTTP_PROXY=${HTTP_PROXY} \
     HTTPS_PROXY=${HTTPS_PROXY} \
     NO_PROXY=${NO_PROXY} \
@@ -16,10 +19,13 @@ ENV HTTP_PROXY=${HTTP_PROXY} \
     https_proxy=${HTTPS_PROXY} \
     no_proxy=${NO_PROXY}
 
-# ---- APT: no proxy + retries/timeouts (more robust under flaky HTTP proxies) ----
+# ---- APT: optional mirror + retries/timeouts ----
 RUN set -eux; \
-    sed -i 's|http://archive.ubuntu.com/ubuntu/|http://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' /etc/apt/sources.list || true; \
-    sed -i 's|http://security.ubuntu.com/ubuntu/|http://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' /etc/apt/sources.list || true; \
+    if [ -n "${UBUNTU_APT_MIRROR}" ]; then \
+      security_mirror="${UBUNTU_SECURITY_APT_MIRROR:-${UBUNTU_APT_MIRROR}}"; \
+      sed -i "s|http://archive.ubuntu.com/ubuntu/|${UBUNTU_APT_MIRROR}/|g" /etc/apt/sources.list || true; \
+      sed -i "s|http://security.ubuntu.com/ubuntu/|${security_mirror}/|g" /etc/apt/sources.list || true; \
+    fi; \
     printf '%s\n' \
       'Acquire::Retries "8";' \
       'Acquire::http::Timeout "60";' \
@@ -27,9 +33,8 @@ RUN set -eux; \
       'Acquire::http::Pipeline-Depth "0";' \
       'Acquire::https::Pipeline-Depth "0";' \
       > /etc/apt/apt.conf.d/80-retries; \
-    env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY apt-get update; \
-    env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
-      apt-get install -y --no-install-recommends --fix-missing \
+    apt-get update; \
+    apt-get install -y --no-install-recommends --fix-missing \
         make autoconf automake libtool g++ \
         sqlite3 libsqlite3-dev \
         pkg-config wget ca-certificates \
@@ -38,17 +43,32 @@ RUN set -eux; \
 
 # ---- GIT: proxy + robustness knobs ----
 RUN set -eux; \
-    git config --global http.proxy "${HTTP_PROXY}"; \
-    git config --global https.proxy "${HTTPS_PROXY}"; \
+    if [ -n "${HTTP_PROXY}" ]; then git config --global http.proxy "${HTTP_PROXY}"; fi; \
+    if [ -n "${HTTPS_PROXY}" ]; then git config --global https.proxy "${HTTPS_PROXY}"; fi; \
     git config --global http.version HTTP/1.1; \
     git config --global http.lowSpeedLimit 1; \
-    git config --global http.lowSpeedTime 600; \
+    git config --global http.lowSpeedTime 120; \
     git config --global http.postBuffer 524288000; \
     git config --global core.compression 0
 
-# PROJ: shallow clone (default branch)
+# PROJ: pinned commit matching benchmark.yaml
 RUN set -eux; \
-    git clone --depth 1 https://github.com/OSGeo/PROJ PROJ
+    rm -rf PROJ; \
+    git init PROJ; \
+    git -C PROJ remote add origin https://github.com/OSGeo/PROJ; \
+    ok=0; \
+    for i in $(seq 1 "${GIT_CLONE_RETRIES}"); do \
+      if git -C PROJ fetch --depth 1 origin "${PROJ_COMMIT}"; then \
+        ok=1; \
+        break; \
+      fi; \
+      echo "PROJ fetch failed (${i}/${GIT_CLONE_RETRIES}), retrying" >&2; \
+      sleep 10; \
+    done; \
+    [ "${ok}" = "1" ]; \
+    git -C PROJ checkout -f FETCH_HEAD; \
+    rm -f PROJ/.git/shallow; \
+    test "$(git -C PROJ rev-parse HEAD)" = "${PROJ_COMMIT}"
 
 # curl: pinned commit via shallow fetch
 RUN set -eux; \

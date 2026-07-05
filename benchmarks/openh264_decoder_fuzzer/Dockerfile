@@ -1,9 +1,11 @@
 FROM gcr.io/oss-fuzz-base/base-builder@sha256:87ca1e9e19235e731fac8de8d1892ebe8d55caf18e7aa131346fc582a2034fdd
 
 # 1) 代理环境：保留给 git/curl 等用
-ARG HTTP_PROXY=http://172.17.0.1:7890
-ARG HTTPS_PROXY=http://172.17.0.1:7890
-ARG NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
+ARG HTTP_PROXY=
+ARG HTTPS_PROXY=
+ARG NO_PROXY=localhost,127.0.0.1,::1
+ARG UBUNTU_APT_MIRROR=
+ARG UBUNTU_SECURITY_APT_MIRROR=
 
 ENV HTTP_PROXY=${HTTP_PROXY}
 ENV HTTPS_PROXY=${HTTPS_PROXY}
@@ -41,8 +43,8 @@ RUN set -eux; \
 
 # 4) git 继续走代理（并加上防巨型仓库断流的抗压配置）
 RUN set -eux; \
-    git config --global http.proxy "${HTTP_PROXY}"; \
-    git config --global https.proxy "${HTTPS_PROXY}"; \
+    if [ -n "${HTTP_PROXY}" ]; then git config --global http.proxy "${HTTP_PROXY}"; fi; \
+    if [ -n "${HTTPS_PROXY}" ]; then git config --global https.proxy "${HTTPS_PROXY}"; fi; \
     git config --global http.postBuffer 524288000; \
     git config --global core.compression 0; \
     git config --global http.version HTTP/1.1

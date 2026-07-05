@@ -4,9 +4,11 @@
 
 FROM gcr.io/oss-fuzz-base/base-builder@sha256:87ca1e9e19235e731fac8de8d1892ebe8d55caf18e7aa131346fc582a2034fdd
 
-ARG HTTP_PROXY="http://172.17.0.1:7890"
-ARG HTTPS_PROXY="http://172.17.0.1:7890"
-ARG NO_PROXY="localhost,127.0.0.1,::1,172.17.0.0/16"
+ARG HTTP_PROXY=
+ARG HTTPS_PROXY=
+ARG NO_PROXY=localhost,127.0.0.1,::1
+ARG UBUNTU_APT_MIRROR=
+ARG UBUNTU_SECURITY_APT_MIRROR=
 
 # Keep proxy for curl/git when needed. We will explicitly disable it for apt.
 ENV HTTP_PROXY=${HTTP_PROXY} \
@@ -79,14 +81,17 @@ RUN set -eux; \
   chmod +x /usr/local/bin/_curl_try
 
 # -----------------------------------------------------------------------------
-# APT: switch to TUNA mirror and install deps (apt ignores proxy)
+# APT: optional mirror and install deps
 # -----------------------------------------------------------------------------
 RUN set -eux; \
-  for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do \
-    [ -f "$f" ] || continue; \
-    sed -i 's|http://archive.ubuntu.com/ubuntu|http://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' "$f" || true; \
-    sed -i 's|http://security.ubuntu.com/ubuntu|http://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' "$f" || true; \
-  done; \
+  if [ -n "${UBUNTU_APT_MIRROR}" ]; then \
+    security_mirror="${UBUNTU_SECURITY_APT_MIRROR:-${UBUNTU_APT_MIRROR}}"; \
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do \
+      [ -f "$f" ] || continue; \
+      sed -i "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_APT_MIRROR}|g" "$f" || true; \
+      sed -i "s|http://security.ubuntu.com/ubuntu|${security_mirror}|g" "$f" || true; \
+    done; \
+  fi; \
   /usr/local/bin/_apt_install \
     ca-certificates \
     curl \

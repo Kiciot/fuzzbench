@@ -5,9 +5,11 @@
 FROM gcr.io/oss-fuzz-base/base-builder@sha256:87ca1e9e19235e731fac8de8d1892ebe8d55caf18e7aa131346fc582a2034fdd
 
 # ---- Proxy (keep for git/curl etc.) ----
-ARG HTTP_PROXY="http://172.17.0.1:7890"
-ARG HTTPS_PROXY="http://172.17.0.1:7890"
-ARG NO_PROXY="localhost,127.0.0.1,::1,172.17.0.0/16"
+ARG HTTP_PROXY=
+ARG HTTPS_PROXY=
+ARG NO_PROXY=localhost,127.0.0.1,::1
+ARG UBUNTU_APT_MIRROR=
+ARG UBUNTU_SECURITY_APT_MIRROR=
 
 ENV HTTP_PROXY=${HTTP_PROXY} \
     HTTPS_PROXY=${HTTPS_PROXY} \
@@ -16,18 +18,19 @@ ENV HTTP_PROXY=${HTTP_PROXY} \
     https_proxy=${HTTPS_PROXY} \
     no_proxy=${NO_PROXY}
 
-# ---- APT: use TUNA mirror and globally disable proxy for APT ----
+# ---- APT: optional mirror + retries ----
 RUN set -eux; \
-    sed -i 's|http://archive.ubuntu.com/ubuntu|http://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' /etc/apt/sources.list || true; \
-    sed -i 's|http://security.ubuntu.com/ubuntu|http://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' /etc/apt/sources.list || true; \
+    if [ -n "${UBUNTU_APT_MIRROR}" ]; then \
+      security_mirror="${UBUNTU_SECURITY_APT_MIRROR:-${UBUNTU_APT_MIRROR}}"; \
+      sed -i "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_APT_MIRROR}|g" /etc/apt/sources.list || true; \
+      sed -i "s|http://security.ubuntu.com/ubuntu|${security_mirror}|g" /etc/apt/sources.list || true; \
+    fi; \
     printf '%s\n' \
       'Acquire::Retries "8";' \
       'Acquire::http::Timeout "60";' \
       'Acquire::https::Timeout "60";' \
       'Acquire::http::Pipeline-Depth "0";' \
       'Acquire::https::Pipeline-Depth "0";' \
-      'Acquire::http::Proxy "false";' \
-      'Acquire::https::Proxy "false";' \
       > /etc/apt/apt.conf.d/80-retries; \
     apt-get update; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --fix-missing \
@@ -36,8 +39,8 @@ RUN set -eux; \
 
 # ---- Git: use proxy + harden; add retry wrapper ----
 RUN set -eux; \
-    git config --global http.proxy "${HTTP_PROXY}"; \
-    git config --global https.proxy "${HTTPS_PROXY}"; \
+    if [ -n "${HTTP_PROXY}" ]; then git config --global http.proxy "${HTTP_PROXY}"; fi; \
+    if [ -n "${HTTPS_PROXY}" ]; then git config --global https.proxy "${HTTPS_PROXY}"; fi; \
     git config --global http.lowSpeedLimit 1; \
     git config --global http.lowSpeedTime 600; \
     git config --global http.postBuffer 524288000; \

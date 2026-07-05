@@ -21,13 +21,16 @@ ENV FUZZER=$fuzzer \
     GIT_TERMINAL_PROMPT=0
 
 # -----------------------------
-# 2) APT robustness: mirror + retries + timeouts
+# 2) APT robustness: optional mirror + retries + timeouts
 # -----------------------------
+ARG UBUNTU_APT_MIRROR=
+ARG UBUNTU_SECURITY_APT_MIRROR=
 RUN set -eux; \
-    if [ -f /etc/apt/sources.list ]; then \
+    if [ -n "${UBUNTU_APT_MIRROR}" ] && [ -f /etc/apt/sources.list ]; then \
+      security_mirror="${UBUNTU_SECURITY_APT_MIRROR:-${UBUNTU_APT_MIRROR}}"; \
       sed -i \
-        -e 's|http://archive.ubuntu.com/ubuntu|http://mirrors.aliyun.com/ubuntu|g' \
-        -e 's|http://security.ubuntu.com/ubuntu|http://mirrors.aliyun.com/ubuntu|g' \
+        -e "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_APT_MIRROR}|g" \
+        -e "s|http://security.ubuntu.com/ubuntu|${security_mirror}|g" \
         /etc/apt/sources.list || true; \
     fi; \
     printf '%s\n' \

@@ -48,14 +48,17 @@ RUN set -eux; \
   git -C /src/curl_fuzzer checkout dd486c1e5910e722e43c451d4de928ac80f5967d; \
   git_retry git clone https://github.com/curl/curl.git /src/curl
 
-# --- Proactive Network Armor (防黑盒脚本背刺) ---
+# --- Network robustness: optional mirror and wget retry wrapper ---
+ARG UBUNTU_APT_MIRROR=
+ARG UBUNTU_SECURITY_APT_MIRROR=
 RUN set -eux; \
-  sed -i 's|http://archive.ubuntu.com/ubuntu/|http://mirrors.aliyun.com/ubuntu/|g' /etc/apt/sources.list || true; \
-  sed -i 's|http://security.ubuntu.com/ubuntu/|http://mirrors.aliyun.com/ubuntu/|g' /etc/apt/sources.list || true; \
+  if [ -n "${UBUNTU_APT_MIRROR}" ]; then \
+    security_mirror="${UBUNTU_SECURITY_APT_MIRROR:-${UBUNTU_APT_MIRROR}}"; \
+    sed -i "s|http://archive.ubuntu.com/ubuntu/|${UBUNTU_APT_MIRROR}/|g" /etc/apt/sources.list || true; \
+    sed -i "s|http://security.ubuntu.com/ubuntu/|${security_mirror}/|g" /etc/apt/sources.list || true; \
+  fi; \
   printf '%s\n' \
     'Acquire::Retries "8";' \
-    'Acquire::http::Proxy "false";' \
-    'Acquire::https::Proxy "false";' \
     > /etc/apt/apt.conf.d/80-retries; \
   mv /usr/bin/wget /usr/bin/wget_orig || true; \
   printf '%s\n' \

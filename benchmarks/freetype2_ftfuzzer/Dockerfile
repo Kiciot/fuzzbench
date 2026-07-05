@@ -4,9 +4,11 @@
 
 FROM gcr.io/oss-fuzz-base/base-builder@sha256:87ca1e9e19235e731fac8de8d1892ebe8d55caf18e7aa131346fc582a2034fdd
 
-ARG HTTP_PROXY="http://172.17.0.1:7890"
-ARG HTTPS_PROXY="http://172.17.0.1:7890"
-ARG NO_PROXY="localhost,127.0.0.1,::1,172.17.0.0/16"
+ARG HTTP_PROXY=
+ARG HTTPS_PROXY=
+ARG NO_PROXY=localhost,127.0.0.1,::1
+ARG UBUNTU_APT_MIRROR=
+ARG UBUNTU_SECURITY_APT_MIRROR=
 
 ENV HTTP_PROXY=${HTTP_PROXY} \
     HTTPS_PROXY=${HTTPS_PROXY} \
@@ -117,10 +119,13 @@ RUN set -eux; \
     > /usr/local/bin/_curl_dl; \
   chmod +x /usr/local/bin/_curl_dl
 
-# ---- APT (force ignore proxy) ----
+# ---- APT: optional mirror ----
 RUN set -eux; \
-  sed -i 's|http://archive.ubuntu.com/ubuntu|http://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' /etc/apt/sources.list || true; \
-  sed -i 's|http://security.ubuntu.com/ubuntu|http://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' /etc/apt/sources.list || true; \
+  if [ -n "${UBUNTU_APT_MIRROR}" ]; then \
+    security_mirror="${UBUNTU_SECURITY_APT_MIRROR:-${UBUNTU_APT_MIRROR}}"; \
+    sed -i "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_APT_MIRROR}|g" /etc/apt/sources.list || true; \
+    sed -i "s|http://security.ubuntu.com/ubuntu|${security_mirror}|g" /etc/apt/sources.list || true; \
+  fi; \
   /usr/local/bin/_apt_install \
     ca-certificates git curl xz-utils \
     make autoconf automake libtool pkg-config

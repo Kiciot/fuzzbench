@@ -25,8 +25,8 @@ ENV USE_PROXY=${USE_PROXY} \
 # Ubuntu mirror
 # -----------------------------
 # 用 HTTP 源做 bootstrap，避免 ca-certificates 尚未安装时 HTTPS apt 源校验失败。
-ARG UBUNTU_MIRROR=http://mirrors.aliyun.com/ubuntu
-ARG UBUNTU_SECURITY_MIRROR=http://mirrors.aliyun.com/ubuntu
+ARG UBUNTU_APT_MIRROR=
+ARG UBUNTU_SECURITY_APT_MIRROR=
 
 # Python 3.10.8 is not the default version in Ubuntu 20.04.
 ENV PYTHON_VERSION=3.10.8
@@ -35,15 +35,22 @@ ENV PYTHON_VERSION=3.10.8
 ARG MAKE_JOBS=0
 ENV MAKE_JOBS=${MAKE_JOBS}
 
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG PIP_TRUSTED_HOST=
+ARG PIP_USE_LEGACY_RESOLVER=0
+
 # -----------------------------
 # APT robustness + mirror replace
 # -----------------------------
 RUN set -eux; \
     if [ -f /etc/apt/sources.list ]; then \
-      sed -i "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" /etc/apt/sources.list || true; \
-      sed -i "s|http://security.ubuntu.com/ubuntu|${UBUNTU_SECURITY_MIRROR}|g" /etc/apt/sources.list || true; \
-      sed -i "s|https://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" /etc/apt/sources.list || true; \
-      sed -i "s|https://security.ubuntu.com/ubuntu|${UBUNTU_SECURITY_MIRROR}|g" /etc/apt/sources.list || true; \
+      if [ -n "${UBUNTU_APT_MIRROR}" ]; then \
+        security_mirror="${UBUNTU_SECURITY_APT_MIRROR:-${UBUNTU_APT_MIRROR}}"; \
+        sed -i "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_APT_MIRROR}|g" /etc/apt/sources.list || true; \
+        sed -i "s|http://security.ubuntu.com/ubuntu|${security_mirror}|g" /etc/apt/sources.list || true; \
+        sed -i "s|https://archive.ubuntu.com/ubuntu|${UBUNTU_APT_MIRROR}|g" /etc/apt/sources.list || true; \
+        sed -i "s|https://security.ubuntu.com/ubuntu|${security_mirror}|g" /etc/apt/sources.list || true; \
+      fi; \
     fi; \
     printf '%s\n' \
       'Acquire::Retries "8";' \
@@ -53,11 +60,7 @@ RUN set -eux; \
       'Acquire::https::Pipeline-Depth "0";' \
       'Acquire::BrokenProxy "true";' \
       'Acquire::ForceIPv4 "true";' \
-      > /etc/apt/apt.conf.d/80-retries; \
-    printf '%s\n' \
-      'Acquire::http::Proxy "false";' \
-      'Acquire::https::Proxy "false";' \
-      > /etc/apt/apt.conf.d/81-proxy-off
+      > /etc/apt/apt.conf.d/80-retries
 
 # -----------------------------
 # Helper: robust apt install
@@ -70,7 +73,7 @@ RUN set -eux; \
 'while [ "$i" -le 8 ]; do' \
 '  rm -rf /var/lib/apt/lists/partial || true' \
 '  mkdir -p /var/lib/apt/lists/partial' \
-'  if env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy -u ALL_PROXY -u all_proxy apt-get update && env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy -u ALL_PROXY -u all_proxy DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --fix-missing "$@"; then' \
+'  if apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --fix-missing "$@"; then' \
 '    exit 0' \
 '  fi' \
 '  echo "apt-get install failed ($i/8): $*" >&2' \
@@ -126,16 +129,10 @@ RUN set -eux; \
 '' \
 'try_one() {' \
 '  url="$1"' \
-'  if [ "${USE_PROXY:-0}" = "1" ]; then' \
-'    if curl -fL --retry 8 --retry-connrefused --retry-delay 5 --retry-max-time 300 --connect-timeout 20 --max-time 600 -o "$out" "$url"; then' \
-'      return 0' \
-'    fi' \
-'    echo "download failed via proxy: $url" >&2' \
-'  fi' \
-'  if env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY curl -fL --retry 8 --retry-connrefused --retry-delay 5 --retry-max-time 300 --connect-timeout 20 --max-time 600 -o "$out" "$url"; then' \
+'  if curl -fL --retry 8 --retry-connrefused --retry-delay 5 --retry-max-time 300 --connect-timeout 20 --max-time 600 -o "$out" "$url"; then' \
 '    return 0' \
 '  fi' \
-'  echo "download failed via direct: $url" >&2' \
+'  echo "download failed: $url" >&2' \
 '  return 1' \
 '}' \
 '' \
@@ -186,20 +183,27 @@ RUN set -eux; \
 # -----------------------------
 COPY ./requirements.txt /tmp/requirements.txt
 RUN set -eux; \
-    env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy -u ALL_PROXY -u all_proxy \
-      python3 -m pip install \
+    pip_index_args="-i ${PIP_INDEX_URL}"; \
+    if [ -n "${PIP_TRUSTED_HOST}" ]; then \
+      pip_index_args="${pip_index_args} --trusted-host ${PIP_TRUSTED_HOST}"; \
+    fi; \
+    resolver_args=""; \
+    if [ "${PIP_USE_LEGACY_RESOLVER}" = "1" ]; then \
+      resolver_args="--use-deprecated=legacy-resolver"; \
+    fi; \
+    python3 -m pip install \
         --retries 8 \
         --timeout 120 \
         --no-cache-dir \
         --upgrade pip setuptools \
-        -i https://mirrors.aliyun.com/pypi/simple; \
-    env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy -u ALL_PROXY -u all_proxy \
-      python3 -m pip install \
+        ${pip_index_args}; \
+    python3 -m pip install \
         --retries 8 \
         --timeout 120 \
         --no-cache-dir \
         -r /tmp/requirements.txt \
-        -i https://mirrors.aliyun.com/pypi/simple; \
+        ${resolver_args} \
+        ${pip_index_args}; \
     rm -f /tmp/requirements.txt
 
 # -----------------------------

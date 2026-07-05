@@ -5,17 +5,21 @@
 ARG parent_image
 FROM $parent_image
 
+ARG UBUNTU_APT_MIRROR=
+ARG UBUNTU_SECURITY_APT_MIRROR=
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN set -eux; \
-    sed -i 's|http://archive.ubuntu.com/ubuntu/|http://mirrors.aliyun.com/ubuntu/|g' /etc/apt/sources.list || true; \
-    sed -i 's|http://security.ubuntu.com/ubuntu/|http://mirrors.aliyun.com/ubuntu/|g' /etc/apt/sources.list || true; \
+    if [ -n "${UBUNTU_APT_MIRROR}" ]; then \
+      security_mirror="${UBUNTU_SECURITY_APT_MIRROR:-${UBUNTU_APT_MIRROR}}"; \
+      sed -i "s|http://archive.ubuntu.com/ubuntu/|${UBUNTU_APT_MIRROR}/|g" /etc/apt/sources.list || true; \
+      sed -i "s|http://security.ubuntu.com/ubuntu/|${security_mirror}/|g" /etc/apt/sources.list || true; \
+    fi; \
     printf '%s\n' \
       'Acquire::Retries "8";' \
       'Acquire::http::Timeout "60";' \
       'Acquire::https::Timeout "60";' \
-      'Acquire::http::Proxy "false";' \
-      'Acquire::https::Proxy "false";' \
       > /etc/apt/apt.conf.d/80-retries; \
     apt-get update && \
     apt-get install -y --no-install-recommends \

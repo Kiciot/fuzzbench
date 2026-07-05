@@ -4,30 +4,37 @@
 
 FROM gcr.io/oss-fuzz-base/base-builder@sha256:87ca1e9e19235e731fac8de8d1892ebe8d55caf18e7aa131346fc582a2034fdd
 
-# ---- Proxy: keep for git/curl only; APT will explicitly ignore it ----
-ENV HTTP_PROXY=http://172.17.0.1:7890
-ENV HTTPS_PROXY=http://172.17.0.1:7890
-ENV NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
-ENV http_proxy=$HTTP_PROXY
-ENV https_proxy=$HTTPS_PROXY
-ENV no_proxy=$NO_PROXY
+# ---- Optional proxy/mirror for network fetches ----
+ARG HTTP_PROXY=
+ARG HTTPS_PROXY=
+ARG NO_PROXY=localhost,127.0.0.1,::1
+ARG UBUNTU_APT_MIRROR=
+ARG UBUNTU_SECURITY_APT_MIRROR=
 
-# ---- APT robustness: retries/timeouts; force APT to ignore proxy GLOBALLY ----
+ENV HTTP_PROXY=${HTTP_PROXY}
+ENV HTTPS_PROXY=${HTTPS_PROXY}
+ENV NO_PROXY=${NO_PROXY}
+ENV http_proxy=${HTTP_PROXY}
+ENV https_proxy=${HTTPS_PROXY}
+ENV no_proxy=${NO_PROXY}
+
+# ---- APT robustness: optional mirror + retries/timeouts ----
 RUN set -eux; \
-  # 1. 替换为清华源，造福下游 Fuzzer 镜像
-  sed -i 's|http://archive.ubuntu.com/ubuntu/|http://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' /etc/apt/sources.list || true; \
-  sed -i 's|http://security.ubuntu.com/ubuntu/|http://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' /etc/apt/sources.list || true; \
-  # 2. 写入全局 APT 配置，包括直接禁用代理 (Proxy "false")
+  # 1. Optional mirror replacement when UBUNTU_APT_MIRROR is set
+  if [ -n "${UBUNTU_APT_MIRROR}" ]; then \
+    security_mirror="${UBUNTU_SECURITY_APT_MIRROR:-${UBUNTU_APT_MIRROR}}"; \
+    sed -i "s|http://archive.ubuntu.com/ubuntu/|${UBUNTU_APT_MIRROR}/|g" /etc/apt/sources.list || true; \
+    sed -i "s|http://security.ubuntu.com/ubuntu/|${security_mirror}/|g" /etc/apt/sources.list || true; \
+  fi; \
+  # 2. Write retry and timeout APT config
   printf '%s\n' \
     'Acquire::Retries "8";' \
     'Acquire::http::Timeout "60";' \
     'Acquire::https::Timeout "60";' \
     'Acquire::http::Pipeline-Depth "0";' \
     'Acquire::https::Pipeline-Depth "0";' \
-    'Acquire::http::Proxy "false";' \
-    'Acquire::https::Proxy "false";' \
     > /etc/apt/apt.conf.d/80-retries; \
-  # 3. apt-get，它绝对不会走代理了
+  # 3. Install build dependencies
   apt-get update; \
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates git cmake ninja-build g++ libz-dev; \
@@ -35,8 +42,8 @@ RUN set -eux; \
 
 # ---- GIT robustness: tolerate slow links ----
 RUN set -eux; \
-  git config --global http.proxy "${HTTP_PROXY}"; \
-  git config --global https.proxy "${HTTPS_PROXY}"; \
+  if [ -n "${HTTP_PROXY}" ]; then git config --global http.proxy "${HTTP_PROXY}"; fi; \
+  if [ -n "${HTTPS_PROXY}" ]; then git config --global https.proxy "${HTTPS_PROXY}"; fi; \
   git config --global http.sslVerify false; \
   git config --global http.lowSpeedLimit 1; \
   git config --global http.lowSpeedTime 600; \
