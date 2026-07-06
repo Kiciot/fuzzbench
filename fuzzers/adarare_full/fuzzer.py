@@ -291,6 +291,12 @@ def fuzz(input_corpus,
     os.environ.setdefault('AFL_BANDIT_REWARD_FORMULA', 'rate_cost')
     os.environ.setdefault('AFL_BANDIT_WINDOW_MS', '5000')
 
+    debug_dir = os.path.join(output_corpus, 'default')
+    os.makedirs(debug_dir, exist_ok=True)
+    os.environ.setdefault('AFL_BANDIT_DEBUG', '1')
+    os.environ.setdefault('AFL_BANDIT_DEBUG_PATH',
+                          os.path.join(debug_dir, '.adarare_dbg.csv'))
+
     # Pin AdaRare configuration for reproducibility.
     os.environ.setdefault('AFL_ADARARE_CONTEXTUAL', '1')
     os.environ.setdefault('AFL_ADARARE_ALPHA', '0.5')
