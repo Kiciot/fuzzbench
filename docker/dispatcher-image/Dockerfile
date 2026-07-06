@@ -42,6 +42,14 @@ RUN DOCKER_VERSION=26.1.4 && \
     mv docker/docker /usr/bin/ && \
     rm -rf docker docker-$DOCKER_VERSION.tgz
 
+# Install docker buildx plugin required by newer Docker CLI when BuildKit is enabled.
+RUN BUILDX_VERSION=0.14.1 && \
+    mkdir -p /usr/libexec/docker/cli-plugins /usr/lib/docker/cli-plugins && \
+    curl -fL https://github.com/docker/buildx/releases/download/v$BUILDX_VERSION/buildx-v$BUILDX_VERSION.linux-amd64 \
+      -o /usr/libexec/docker/cli-plugins/docker-buildx && \
+    chmod +x /usr/libexec/docker/cli-plugins/docker-buildx && \
+    ln -sf /usr/libexec/docker/cli-plugins/docker-buildx /usr/lib/docker/cli-plugins/docker-buildx
+
 # Install cloud sql proxy.
 RUN curl https://dl.google.com/cloudsql/cloud_sql_proxy.linux.amd64 > \
     /usr/local/bin/cloud_sql_proxy
