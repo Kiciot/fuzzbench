@@ -36,7 +36,7 @@ RUN apt-get update -y && apt-get install -y \
     libgl1
 
 # Install docker cli.
-RUN DOCKER_VERSION=18.09.7 && \
+RUN DOCKER_VERSION=26.1.4 && \
     curl -O https://download.docker.com/linux/static/stable/x86_64/docker-$DOCKER_VERSION.tgz && \
     tar -xvzf docker-$DOCKER_VERSION.tgz && \
     mv docker/docker /usr/bin/ && \
