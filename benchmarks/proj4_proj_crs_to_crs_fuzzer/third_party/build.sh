@@ -42,9 +42,14 @@ make -j$(nproc) -s
 make install
 cd ..
 
-# build libtiff.a
+# build libtiff.a. Run autotools directly instead of libtiff/autogen.sh,
+# whose final config.guess/config.sub network refresh is flaky in Docker builds.
 cd libtiff
-./autogen.sh
+libtoolize --force --copy
+aclocal -I ./m4
+autoheader
+automake --foreign --add-missing --copy
+autoconf
 ./configure --disable-shared --prefix=$SRC/install
 make -j$(nproc)
 make install
