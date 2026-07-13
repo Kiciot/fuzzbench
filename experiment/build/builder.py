@@ -120,6 +120,16 @@ def build_all_measurers(benchmarks: List[str]) -> List[str]:
     return [successful_call[0] for successful_call in successful_calls]
 
 
+def reuse_all_measurers(benchmarks: List[str]) -> List[str]:
+    """Copies measurer binaries from gated images without rebuilding them."""
+    logger.info('Reusing gated measurer images.')
+    filesystem.recreate_directory(build_utils.get_coverage_binaries_dir())
+    for benchmark in benchmarks:
+        buildlib.reuse_coverage(benchmark)
+    logger.info('Done reusing gated measurer images.')
+    return benchmarks
+
+
 def split_successes_and_failures(inputs: List,
                                  results: List[bool]) -> Tuple[List, List]:
     """Returns a tuple where the left side is a list of every input[idx] where
@@ -195,6 +205,17 @@ def build_all_fuzzer_benchmarks(fuzzers: List[str],
                                         build_fuzzer_benchmark_args)
     logger.info('Done building fuzzer benchmarks.')
     return successful_calls
+
+
+def reuse_all_fuzzer_benchmarks(fuzzers: List[str],
+                                benchmarks: List[str]) -> List[str]:
+    """Validates gated local images and returns all supported pairs."""
+    pairs = get_fuzzer_benchmark_pairs(fuzzers, benchmarks)
+    logger.info('Validating %d gated fuzzer benchmark image pairs.', len(pairs))
+    for fuzzer, benchmark in pairs:
+        buildlib.validate_fuzzer_benchmark_images(fuzzer, benchmark)
+    logger.info('Done validating gated fuzzer benchmark image pairs.')
+    return pairs
 
 
 def main():

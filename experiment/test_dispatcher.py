@@ -126,6 +126,32 @@ def test_build_images_for_trials_build_success(_, dispatcher_experiment):
         trial_fuzzer_benchmarks))
 
 
+def test_build_images_for_trials_reuses_gated_images(monkeypatch,
+                                                     dispatcher_experiment):
+    """Tests that explicit reuse validates images without rebuilding them."""
+    monkeypatch.setenv('FUZZBENCH_REUSE_LOCAL_IMAGES', '1')
+    fuzzer_benchmarks = list(
+        itertools.product(dispatcher_experiment.fuzzers,
+                          dispatcher_experiment.benchmarks))
+    with mock.patch('common.experiment_utils.is_local_experiment',
+                    return_value=True):
+        with mock.patch(
+                'experiment.build.builder.build_base_images') as base_build:
+            with mock.patch('experiment.build.builder.reuse_all_measurers',
+                            return_value=dispatcher_experiment.benchmarks):
+                with mock.patch(
+                        'experiment.build.builder.reuse_all_fuzzer_benchmarks',
+                        return_value=fuzzer_benchmarks):
+                    trials = dispatcher.build_images_for_trials(
+                        dispatcher_experiment.fuzzers,
+                        dispatcher_experiment.benchmarks,
+                        dispatcher_experiment.num_trials,
+                        dispatcher_experiment.preemptible)
+    base_build.assert_not_called()
+    assert len(trials) == (len(fuzzer_benchmarks) *
+                           dispatcher_experiment.num_trials)
+
+
 @mock.patch('experiment.build.builder.build_base_images')
 def test_build_images_for_trials_benchmark_fail(_, dispatcher_experiment):
     """Tests that build_for_trial doesn't return trials or try to build fuzzers

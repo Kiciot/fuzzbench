@@ -502,6 +502,16 @@ def _local_dispatcher_proxy_args():
     return ['--network=host'], environment_args
 
 
+def _local_dispatcher_reuse_args():
+    """Returns the opt-in gated-image reuse argument for local runs."""
+    reuse = os.environ.get('FUZZBENCH_REUSE_LOCAL_IMAGES', '').strip()
+    if reuse in ('', '0'):
+        return []
+    if reuse != '1':
+        raise ValueError('FUZZBENCH_REUSE_LOCAL_IMAGES must be 0 or 1.')
+    return ['-e', 'FUZZBENCH_REUSE_LOCAL_IMAGES=1']
+
+
 class LocalDispatcher(BaseDispatcher):
     """Class representing the local dispatcher."""
 
@@ -567,6 +577,7 @@ class LocalDispatcher(BaseDispatcher):
         ]
         network_args, proxy_environment_args = _local_dispatcher_proxy_args()
         environment_args.extend(proxy_environment_args)
+        environment_args.extend(_local_dispatcher_reuse_args())
         command = [
             'docker',
             'run',

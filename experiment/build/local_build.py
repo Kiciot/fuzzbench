@@ -82,6 +82,12 @@ def build_coverage(benchmark):
     return result
 
 
+def reuse_coverage(benchmark):
+    """Copies coverage binaries from an existing local builder image."""
+    make_shared_coverage_binaries_dir()
+    return copy_coverage_binaries(benchmark)
+
+
 def copy_coverage_binaries(benchmark):
     """Copy coverage binaries in a local experiment."""
     shared_coverage_binaries_dir = get_shared_coverage_binaries_dir()
@@ -104,3 +110,17 @@ def build_fuzzer_benchmark(fuzzer: str, benchmark: str) -> bool:
     """Builds |benchmark| for |fuzzer|."""
     image_name = f'build-{fuzzer}-{benchmark}'
     make([image_name])
+
+
+def validate_fuzzer_benchmark_images(fuzzer: str, benchmark: str) -> bool:
+    """Validates that gated local builder and runner images both exist."""
+    docker_registry = environment.get('DOCKER_REGISTRY')
+    builder_image_url = benchmark_utils.get_builder_image_url(
+        benchmark, fuzzer, docker_registry)
+    runner_image_url = benchmark_utils.get_runner_image_url(
+        experiment_utils.get_experiment_name(), benchmark, fuzzer,
+        docker_registry)
+    new_process.execute([
+        'docker', 'image', 'inspect', builder_image_url, runner_image_url
+    ])
+    return True

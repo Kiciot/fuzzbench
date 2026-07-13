@@ -73,6 +73,19 @@ def test_local_dispatcher_proxy_args_enabled(monkeypatch):
                for arg in environment_args)
 
 
+def test_local_dispatcher_reuse_args(monkeypatch):
+    """Tests that gated image reuse is explicit and strictly validated."""
+    monkeypatch.delenv('FUZZBENCH_REUSE_LOCAL_IMAGES', raising=False)
+    assert run_experiment._local_dispatcher_reuse_args() == []
+    monkeypatch.setenv('FUZZBENCH_REUSE_LOCAL_IMAGES', '1')
+    assert run_experiment._local_dispatcher_reuse_args() == [
+        '-e', 'FUZZBENCH_REUSE_LOCAL_IMAGES=1'
+    ]
+    monkeypatch.setenv('FUZZBENCH_REUSE_LOCAL_IMAGES', 'yes')
+    with pytest.raises(ValueError):
+        run_experiment._local_dispatcher_reuse_args()
+
+
 class TestReadAndValdiateExperimentConfig(unittest.TestCase):
     """Tests for read_and_validate_experiment_config."""
 

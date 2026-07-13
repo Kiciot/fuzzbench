@@ -111,13 +111,23 @@ def build_images_for_trials(fuzzers: List[str], benchmarks: List[str],
     """Builds the images needed to run |experiment| and returns a list of trials
     that can be run for experiment. This is the number of trials specified in
     experiment times each pair of fuzzer+benchmark that builds successfully."""
-    # This call will raise an exception if the images can't be built which will
-    # halt the experiment.
-    builder.build_base_images()
+    reuse_local_images = os.getenv('FUZZBENCH_REUSE_LOCAL_IMAGES') == '1'
+    if reuse_local_images:
+        if not experiment_utils.is_local_experiment():
+            raise RuntimeError('Gated image reuse is only valid locally.')
+        logs.info('Reusing prebuilt images; no experiment image builds run.')
+        benchmarks = builder.reuse_all_measurers(benchmarks)
+        build_successes = builder.reuse_all_fuzzer_benchmarks(
+            fuzzers, benchmarks)
+    else:
+        # This call will raise an exception if the images can't be built which
+        # will halt the experiment.
+        builder.build_base_images()
 
-    # Only build fuzzers for benchmarks whose measurers built successfully.
-    benchmarks = builder.build_all_measurers(benchmarks)
-    build_successes = builder.build_all_fuzzer_benchmarks(fuzzers, benchmarks)
+        # Only build fuzzers for benchmarks whose measurers built successfully.
+        benchmarks = builder.build_all_measurers(benchmarks)
+        build_successes = builder.build_all_fuzzer_benchmarks(
+            fuzzers, benchmarks)
     experiment_name = experiment_utils.get_experiment_name()
     trials = []
     for fuzzer, benchmark in build_successes:
