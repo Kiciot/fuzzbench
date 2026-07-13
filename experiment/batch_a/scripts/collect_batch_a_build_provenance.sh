@@ -62,7 +62,7 @@ manifest_sha() { sha256sum "$1" | awk '{print $1}'; }
 
 cd "$FB"
 FB_COMMIT="$(git rev-parse HEAD)"
-AFL_COMMIT="$(sed -n 's/^ARG AFLPLUSPLUS_COMMIT=//p' fuzzers/adarare_full/builder.Dockerfile | head -1)"
+AFL_COMMIT="$(grep 'rev-parse HEAD' fuzzers/adarare_full/builder.Dockerfile | grep -oE '[0-9a-f]{40}' | head -1 || true)"
 [[ "$AFL_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid AFL++ pin: $AFL_COMMIT" >&2; exit 1; }
 
 for benchmark in "${BENCHMARKS[@]}"; do
