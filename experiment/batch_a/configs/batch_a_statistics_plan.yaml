@@ -1,0 +1,44 @@
+plan_name: adarare_batch_a_causal_attribution_v1
+frozen_before_formal_run: true
+trial_pairing:
+  assumed: false
+  tests: unpaired
+endpoints:
+  primary_seconds: 85500
+  sensitivity_seconds: 86400
+  secondary_seconds: [21600, 43200]
+  normalized_auc_interval_seconds: [0, 85500]
+summaries:
+  - median
+  - IQR
+  - bootstrap_95_percent_CI
+  - Mann_Whitney_U
+  - Holm_adjusted_p
+  - Vargha_Delaney_A12
+families:
+  primary_controller:
+    control: adarare_linucb_no_a6
+    comparisons:
+      - adarare_constant_context_no_a6
+      - adarare_random_profile
+      - adarare_round_robin_profile
+    holm_tests: 15
+    definition: 3 comparisons x 5 preregistered targets
+  static:
+    control: adarare_linucb_no_a6
+    comparisons:
+      - adarare_static_a1
+      - adarare_static_a2
+      - adarare_static_a3
+      - adarare_static_a4
+      - adarare_static_a5
+    holm_tests: 25
+    definition: 5 comparisons x 5 preregistered targets
+  a6:
+    comparison: [adarare_full, adarare_linucb_no_a6]
+    holm_tests: 5
+    definition: 1 comparison x 5 preregistered targets
+prohibitions:
+  - do_not_select_best_static_for_an_uncorrected_test
+  - do_not_call_tests_paired_without_strict_trial_pairing
+  - do_not_change_this_plan_after_formal_campaigns_start

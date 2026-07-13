@@ -69,6 +69,7 @@ for value in "$CONCURRENCY" "$MAKE_JOBS" "$MIN_ROOT_GB" "$MIN_DATA_GB"; do
 done
 
 mkdir -p "$LOGS" "${BATCH}/manifests"
+mkdir -p "${OUT}/locks"
 printf 'benchmark\tfuzzer\tmake_target\tstart_time\tend_time\tduration_sec\texit_code\tstatus\tlog_path\n' > "$SUMMARY"
 printf 'benchmark\tmake_target\tstart_time\tend_time\tduration_sec\texit_code\tstatus\tlog_path\n' > "$COVERAGE_SUMMARY"
 printf '%s\n' "$OUT" > "${BATCH}/manifests/latest_build_matrix.txt"
@@ -108,7 +109,7 @@ run_coverage() {
   else
     (
       cd "$FB" || exit 97
-      ADARARE_DOCKER_BUILD_ARGS="$(build_args)" make -j"$MAKE_JOBS" "$target"
+      ADARARE_DOCKER_BUILD_ARGS="$(build_args)" make -j"$MAKE_JOBS" -o base-image "$target"
     ) >>"$log" 2>&1
     rc=$?
   fi
@@ -136,11 +137,16 @@ run_one() {
   if [[ -e "$STOP_FILE" ]] || ! disk_gate >>"$log" 2>&1; then
     rc=98
   else
+    local bench_lock_fd
+    exec {bench_lock_fd}>"${OUT}/locks/${benchmark}.lock"
+    flock "$bench_lock_fd"
     (
       cd "$FB" || exit 97
-      ADARARE_DOCKER_BUILD_ARGS="$(build_args)" make -j"$MAKE_JOBS" "$target"
+      ADARARE_DOCKER_BUILD_ARGS="$(build_args)" make -j"$MAKE_JOBS" -o base-image "$target"
     ) >>"$log" 2>&1
     rc=$?
+    flock -u "$bench_lock_fd"
+    exec {bench_lock_fd}>&-
   fi
   end="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   duration=$(( $(date +%s) - start_epoch ))
@@ -162,6 +168,24 @@ wait_for_slot() {
 echo "output=$OUT"
 echo "coverage_builds=${#BENCHMARKS[@]} matrix_builds=$((${#BENCHMARKS[@]} * ${#FUZZERS[@]})) concurrency=$CONCURRENCY"
 
+BASE_LOG="${LOGS}/base_image.log"
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] START base-image" > "$BASE_LOG"
+if ! disk_gate >>"$BASE_LOG" 2>&1; then
+  echo "BASE_IMAGE_GATE=FAIL reason=disk_gate" | tee -a "$BASE_LOG" "${OUT}/status.txt" >&2
+  exit 1
+fi
+(
+  cd "$FB" || exit 97
+  ADARARE_DOCKER_BUILD_ARGS="$(build_args)" make -j1 base-image
+) >>"$BASE_LOG" 2>&1
+base_rc=$?
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] END base-image rc=$base_rc" >> "$BASE_LOG"
+if (( base_rc != 0 )); then
+  echo "BASE_IMAGE_GATE=FAIL rc=$base_rc" | tee -a "${OUT}/status.txt" >&2
+  exit 1
+fi
+echo "BASE_IMAGE_GATE=PASS" >> "$BASE_LOG"
+
 for benchmark in "${BENCHMARKS[@]}"; do
   [[ -e "$STOP_FILE" ]] && break
   wait_for_slot
@@ -176,8 +200,8 @@ if (( coverage_failures != 0 || coverage_records != 6 )); then
   exit 1
 fi
 
-for benchmark in "${BENCHMARKS[@]}"; do
-  for fuzzer in "${FUZZERS[@]}"; do
+for fuzzer in "${FUZZERS[@]}"; do
+  for benchmark in "${BENCHMARKS[@]}"; do
     [[ -e "$STOP_FILE" ]] && break 2
     wait_for_slot
     run_one "$benchmark" "$fuzzer" &
