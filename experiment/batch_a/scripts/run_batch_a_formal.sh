@@ -170,6 +170,7 @@ EXP="baf500-$(date -u +%m%d%H%M)"
   df -h / /data
 } | tee "$FORMAL_ROOT/formal_provenance.txt"
 
+FUZZBENCH_LOCAL_PROXY="${FUZZBENCH_LOCAL_PROXY:-http://127.0.0.1:7890}" \
 PYTHONPATH=. .venv/bin/python3 experiment/run_experiment.py \
   --experiment-config "$CONFIG_RUN" \
   --experiment-name "$EXP" \

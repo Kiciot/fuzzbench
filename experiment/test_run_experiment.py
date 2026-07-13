@@ -53,6 +53,23 @@ def test_source_filter_does_not_exclude_similar_name():
     assert not run_experiment.FILTER_SOURCE_REGEX.match('.venv-example')
 
 
+def test_local_dispatcher_proxy_args_disabled(monkeypatch):
+    """Tests that local dispatcher networking is unchanged by default."""
+    monkeypatch.delenv('FUZZBENCH_LOCAL_PROXY', raising=False)
+    assert run_experiment._local_dispatcher_proxy_args() == ([], [])
+
+
+def test_local_dispatcher_proxy_args_enabled(monkeypatch):
+    """Tests opt-in host networking and explicit proxy propagation."""
+    monkeypatch.setenv('FUZZBENCH_LOCAL_PROXY', 'http://127.0.0.1:7890')
+    network_args, environment_args = (
+        run_experiment._local_dispatcher_proxy_args())
+    assert network_args == ['--network=host']
+    assert 'HTTP_PROXY=http://127.0.0.1:7890' in environment_args
+    assert 'HTTPS_PROXY=http://127.0.0.1:7890' in environment_args
+    assert 'NO_PROXY=localhost,127.0.0.1,::1' in environment_args
+
+
 class TestReadAndValdiateExperimentConfig(unittest.TestCase):
     """Tests for read_and_validate_experiment_config."""
 

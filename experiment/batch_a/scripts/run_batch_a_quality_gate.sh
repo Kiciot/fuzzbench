@@ -111,6 +111,7 @@ EXP="baq$(echo "$STAGE" | tr -d '-')-$(date -u +%m%d%H%M%S)"
   df -h / /data
 } > "$RUN_DIR/stage_provenance.txt"
 
+FUZZBENCH_LOCAL_PROXY="${FUZZBENCH_LOCAL_PROXY:-http://127.0.0.1:7890}" \
 PYTHONPATH=. .venv/bin/python3 experiment/run_experiment.py \
   --experiment-config "$CONFIG_RUN" \
   --experiment-name "$EXP" \

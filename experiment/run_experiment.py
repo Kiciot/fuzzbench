@@ -470,6 +470,27 @@ class BaseDispatcher:
         raise NotImplementedError
 
 
+def _local_dispatcher_proxy_args():
+    """Returns opt-in Docker network and proxy arguments for local runs."""
+    proxy = os.environ.get('FUZZBENCH_LOCAL_PROXY', '').strip()
+    if not proxy:
+        return [], []
+
+    no_proxy = os.environ.get('FUZZBENCH_LOCAL_NO_PROXY',
+                              'localhost,127.0.0.1,::1')
+    environment_args = []
+    for name, value in (
+        ('HTTP_PROXY', proxy),
+        ('HTTPS_PROXY', proxy),
+        ('http_proxy', proxy),
+        ('https_proxy', proxy),
+        ('NO_PROXY', no_proxy),
+        ('no_proxy', no_proxy),
+    ):
+        environment_args.extend(['-e', f'{name}={value}'])
+    return ['--network=host'], environment_args
+
+
 class LocalDispatcher(BaseDispatcher):
     """Class representing the local dispatcher."""
 
@@ -533,6 +554,8 @@ class LocalDispatcher(BaseDispatcher):
             '-e',
             set_worker_pool_name_arg,
         ]
+        network_args, proxy_environment_args = _local_dispatcher_proxy_args()
+        environment_args.extend(proxy_environment_args)
         command = [
             'docker',
             'run',
@@ -544,7 +567,7 @@ class LocalDispatcher(BaseDispatcher):
             shared_experiment_filestore_arg,
             '-v',
             shared_report_filestore_arg,
-        ] + environment_args + [
+        ] + network_args + environment_args + [
             '--shm-size=2g',
             '--cap-add=SYS_PTRACE',
             '--cap-add=SYS_NICE',
