@@ -42,6 +42,17 @@ def test_validate_benchmarks_invalid_benchmark():
         run_experiment.validate_benchmarks('common.sh')
 
 
+@pytest.mark.parametrize('path', ['.venv', '.venv/', '.venv/bin/activate'])
+def test_source_filter_excludes_venv(path):
+    """Tests that both a venv symlink and its contents are excluded."""
+    assert run_experiment.FILTER_SOURCE_REGEX.match(path)
+
+
+def test_source_filter_does_not_exclude_similar_name():
+    """Tests that similarly named source paths remain in the archive."""
+    assert not run_experiment.FILTER_SOURCE_REGEX.match('.venv-example')
+
+
 class TestReadAndValdiateExperimentConfig(unittest.TestCase):
     """Tests for read_and_validate_experiment_config."""
 
