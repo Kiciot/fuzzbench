@@ -46,7 +46,7 @@ RUN set -eux; \
 RUN set -eux; \
   git_retry git clone https://github.com/curl/curl-fuzzer /src/curl_fuzzer; \
   git -C /src/curl_fuzzer checkout dd486c1e5910e722e43c451d4de928ac80f5967d; \
-  git_retry git clone https://github.com/curl/curl.git /src/curl
+  git_retry git clone --depth 1 --single-branch https://github.com/curl/curl.git /src/curl
 
 # --- Network robustness: optional mirror and wget retry wrapper ---
 ARG UBUNTU_APT_MIRROR=
@@ -63,56 +63,15 @@ RUN set -eux; \
   mv /usr/bin/wget /usr/bin/wget_orig || true; \
   printf '%s\n' \
     '#!/bin/sh' \
-    'exec /usr/bin/wget_orig --no-check-certificate --tries=10 "$@"' \
+    'exec /usr/bin/wget_orig --tries=10 --timeout=60 "$@"' \
     > /usr/bin/wget; \
   chmod +x /usr/bin/wget
 
-# --- 终极逃课：手动预下载 OpenSSL 源码，绕过 Git 克隆 ---
-RUN set -eux; \
-  wget -O openssl.tar.gz https://github.com/openssl/openssl/archive/refs/tags/openssl-3.0.12.tar.gz; \
-  mkdir -p /src/openssl; \
-  tar -xzf openssl.tar.gz -C /src/openssl --strip-components=1; \
-  rm openssl.tar.gz; \
-  # 伪造一个 git 仓库，以防后续的某些脚本执行 git rev-parse \
-  cd /src/openssl; \
-  git init; \
-  git config user.email "test@example.com"; \
-  git config user.name "Test"; \
-  git commit --allow-empty -m "dummy commit"
-
 # Use curl-fuzzer's scripts to get latest dependencies.
 RUN set -eux; \
-    find $SRC/curl_fuzzer/scripts -name "*.sh" -exec sed -i 's/git clone/git clone --depth 1/g' {} +; \
-    find $SRC/curl_fuzzer/scripts -name "*.sh" -exec sed -i 's/OpenSSL_1_0_2m/openssl-3.0.12/g' {} +; \
-    printf '%s\n' \
-      '#!/bin/bash -eu' \
-      'OUT="${1:?usage: download_nghttp2.sh OUTDIR}"' \
-      'TMP=/tmp/nghttp2-v1.41.0.tar.gz' \
-      'rm -rf "$OUT" "$TMP"' \
-      'if command -v _dl_retry >/dev/null 2>&1; then' \
-      '  if _dl_retry https://codeload.github.com/nghttp2/nghttp2/tar.gz/refs/tags/v1.41.0 https://github.com/nghttp2/nghttp2/archive/refs/tags/v1.41.0.tar.gz "" "$TMP"; then' \
-      '    mkdir -p "$OUT"' \
-      '    tar -xzf "$TMP" -C "$OUT" --strip-components=1' \
-      '    exit 0' \
-      '  fi' \
-      'fi' \
-      'for i in 1 2 3 4 5 6; do' \
-      '  rm -rf "$OUT"' \
-      '  if git clone --depth 1 --branch v1.41.0 https://github.com/nghttp2/nghttp2 "$OUT"; then exit 0; fi' \
-      '  echo "download_nghttp2 retry $i/6" >&2' \
-      '  sleep 10' \
-      'done' \
-      'exit 1' \
-      > $SRC/curl_fuzzer/scripts/download_nghttp2.sh; \
-    chmod +x $SRC/curl_fuzzer/scripts/download_nghttp2.sh; \
     /bin/bash -x "$SRC/curl_fuzzer/scripts/ossfuzzdeps.sh"
 
 WORKDIR $SRC/curl_fuzzer
 
 # Keep build.sh as-is (but it will benefit from global git settings).
 COPY build.sh $SRC/
-
-# --- 修复 Coverage 链接报错核心逻辑 (精确狙击版) ---
-RUN set -eux; \
-    # 直接精准定位到 OpenSSL 的安装脚本，把捣乱的 enable-fuzz-libfuzzer 替换成救命的 no-tests
-    sed -i 's/enable-fuzz-libfuzzer/no-tests/g' $SRC/curl_fuzzer/scripts/install_openssl.sh || true
