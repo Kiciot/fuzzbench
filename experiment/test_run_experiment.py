@@ -68,6 +68,9 @@ def test_local_dispatcher_proxy_args_enabled(monkeypatch):
     assert 'HTTP_PROXY=http://127.0.0.1:7890' in environment_args
     assert 'HTTPS_PROXY=http://127.0.0.1:7890' in environment_args
     assert 'NO_PROXY=localhost,127.0.0.1,::1' in environment_args
+    assert any(arg.startswith('ADARARE_DOCKER_BUILD_ARGS=--network=host ') and
+               '--build-arg HTTP_PROXY=http://127.0.0.1:7890' in arg
+               for arg in environment_args)
 
 
 class TestReadAndValdiateExperimentConfig(unittest.TestCase):

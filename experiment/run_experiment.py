@@ -488,6 +488,17 @@ def _local_dispatcher_proxy_args():
         ('no_proxy', no_proxy),
     ):
         environment_args.extend(['-e', f'{name}={value}'])
+    build_args = ' '.join((
+        '--network=host',
+        f'--build-arg HTTP_PROXY={proxy}',
+        f'--build-arg HTTPS_PROXY={proxy}',
+        f'--build-arg http_proxy={proxy}',
+        f'--build-arg https_proxy={proxy}',
+        f'--build-arg NO_PROXY={no_proxy}',
+        f'--build-arg no_proxy={no_proxy}',
+    ))
+    environment_args.extend(
+        ['-e', f'ADARARE_DOCKER_BUILD_ARGS={build_args}'])
     return ['--network=host'], environment_args
 
 
