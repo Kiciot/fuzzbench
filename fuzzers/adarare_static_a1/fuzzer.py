@@ -285,7 +285,7 @@ def fuzz(input_corpus,
     # os.environ['AFL_ALIGNED_ALLOC'] = '1' # align malloc to max_align_t
     # os.environ['AFL_PRELOAD'] = '/afl/libdislocator.so'
 
-    # AFL++ full branch only calls bandit_init() when AFL_BANDIT is enabled.
+    # The unified AdaRare commit calls bandit_init() when AFL_BANDIT is enabled.
     os.environ['AFL_BANDIT'] = '1'
     os.environ.setdefault('AFL_BANDIT_REWARD', 'rarity_mass')
     os.environ.setdefault('AFL_BANDIT_REWARD_FORMULA', 'rate_cost')

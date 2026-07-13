@@ -1,16 +1,9 @@
-# AdaRare Round-Robin Profile
+# AdaRare round-robin profile
 
-Profile-control AdaRare FuzzBench variant.
-
-- FuzzBench variant: `adarare_round_robin_profile`
-- AFL++ repo: `https://github.com/Kiciot/AFLplusplus`
-- AFL++ pinned commit: `e04c5739b4af4f03aac6ee99025bed4aad05c152`
-- Experiment group: `profile-control`
-- A6 delegated sharing: disabled by profile-control policy
-- Window: `AFL_BANDIT_WINDOW_MS=5000`
-
-Runtime environment:
+Batch A variant `adarare_round_robin_profile`, pinned to AFL++ commit `8224da1dce693d0a7de8d21cd9108c4e0e3a5b54`.
 
 ```text
 AFL_ADARARE_POLICY=round_robin_profile
+AFL_ADARARE_ENABLE_A6=0
+AFL_ADARARE_CONTEXT_MODE=dynamic
 ```
