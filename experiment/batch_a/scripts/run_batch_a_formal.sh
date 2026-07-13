@@ -145,7 +145,7 @@ PY
   sha256sum -c SHA256SUMS
 )
 
-TS="$(date -u +%Y%m%dT%H%M%SZ)"
+TS="$(date -u +%Y%m%dt%H%M%Sz)"
 FORMAL_ROOT="${BATCH}/results/formal_${TS}"
 mkdir -p "$FORMAL_ROOT/logs" "$FORMAL_ROOT/reports"
 printf '%s\n' "$FORMAL_ROOT" > "${BATCH}/manifests/latest_formal_root.txt"

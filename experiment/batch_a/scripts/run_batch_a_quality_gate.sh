@@ -49,7 +49,7 @@ git fetch origin
 MARKER="${BATCH}/manifests/latest_quality_gate_root.txt"
 case "$STAGE" in
   curl)
-    TS="$(date -u +%Y%m%dT%H%M%SZ)"
+    TS="$(date -u +%Y%m%dt%H%M%Sz)"
     QROOT="${BATCH}/results/quality_gate_${TS}"
     mkdir -p "$QROOT"
     printf '%s\n' "$QROOT" > "$MARKER"
