@@ -1,0 +1,12 @@
+# AdaRare Batch A frozen formal-run template.
+trials: 10
+max_total_time: 86400
+snapshot_period: 900
+docker_registry: gcr.io/fuzzbench
+experiment_filestore: /data/adarare_exp/batch_a/results/UNSET/experiment-data
+report_filestore: /data/adarare_exp/batch_a/results/UNSET/reports
+local_experiment: true
+private: true
+micro_experiment: false
+runner_num_cpu_cores: 1
+runner_memory: 12GB
