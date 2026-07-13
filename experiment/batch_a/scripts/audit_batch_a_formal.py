@@ -17,7 +17,8 @@ import subprocess
 from typing import Any
 
 from audit_batch_a_quality_gate import (
-    EXPECTED, FUZZERS, arm_rows, latest_archive, pick, read_members,
+    EXPECTED, FUZZERS, archive_file_count, latest_archive, pick,
+    read_trial_members, select_arm_telemetry,
 )
 
 
@@ -125,18 +126,24 @@ def main() -> int:
 
         trial_dir = exp_root / "experiment-folders" / f"{benchmark}-{fuzzer}" / f"trial-{trial_id}"
         archive = latest_archive(trial_dir) if trial_dir.is_dir() else None
-        members = read_members(archive) if archive else {}
+        members, member_sources = read_trial_members(trial_dir) if trial_dir.is_dir() else ({}, {})
+        terminal_cycle = terminal_time // 900 if terminal_time >= 0 else -1
+        terminal_archive = (trial_dir / "corpus-archives" /
+                            f"corpus-archive-{terminal_cycle:04d}.tar.gz")
+        if not terminal_archive.is_file():
+            terminal_archive = None
+        terminal_archive_files = archive_file_count(terminal_archive)
         config_name, config_data = pick(members, [".adarare_config.json", "adarare_config.json"])
-        bandit_name, bandit_data = pick(members, [".adarare_bandit.csv", "adarare_bandit.csv"])
-        source = "standard"
-        if bandit_data is None:
-            bandit_name, bandit_data = pick(members, [".adarare_dbg.csv", "adarare_dbg.csv"])
-            source = "debug_policy_audit_fallback"
+        bandit_name, selected, effective, source = select_arm_telemetry(members)
         config = parse_config(config_data)
-        selected, effective = arm_rows(bandit_data)
         if archive is None: row_fail.append("missing_terminal_corpus_archive")
+        if terminal_archive_files <= 0: row_fail.append("missing_or_empty_in_budget_terminal_archive")
         if not config: row_fail.append("missing_or_invalid_config")
         if not selected: row_fail.append("missing_arm_telemetry")
+        expected_windows = terminal_time * 1000 // 5000 if terminal_time > 0 else 0
+        minimum_windows = max(5, expected_windows * 9 // 10)
+        if len(selected) < minimum_windows:
+            row_fail.append(f"incomplete_arm_telemetry:{len(selected)}<{minimum_windows}")
 
         expected = EXPECTED[fuzzer]
         policy, enable_a6, context_mode, static_arm = expected
@@ -173,6 +180,10 @@ def main() -> int:
             "trial_id": trial_id, "benchmark": benchmark, "fuzzer": fuzzer,
             "archive": str(archive or ""), "config_file": config_name or "",
             "arm_file": bandit_name or "", "telemetry_source": source,
+            "config_archive": member_sources.get(config_name or "", ""),
+            "arm_archive": member_sources.get(bandit_name or "", ""),
+            "terminal_archive": str(terminal_archive or ""),
+            "terminal_archive_files": terminal_archive_files,
             "config_present": bool(config), "arm_rows": len(selected),
             "status": "PASS" if archive and config and selected else "FAIL",
         })

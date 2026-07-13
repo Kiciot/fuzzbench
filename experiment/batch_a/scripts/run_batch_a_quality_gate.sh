@@ -111,6 +111,11 @@ EXP="baq$(echo "$STAGE" | tr -d '-')-$(date -u +%m%d%H%M%S)"
   df -h / /data
 } > "$RUN_DIR/stage_provenance.txt"
 
+python3 "${BATCH}/scripts/check_batch_a_runtime_images.py" \
+  --provenance "$PROV_DIR/build_provenance.tsv" \
+  --output "$RUN_DIR/runtime_image_audit.tsv" \
+  --benchmarks "${BENCHMARKS[@]}"
+
 FUZZBENCH_REUSE_LOCAL_IMAGES=1 \
 FUZZBENCH_LOCAL_PROXY="${FUZZBENCH_LOCAL_PROXY:-http://127.0.0.1:7890}" \
 PYTHONPATH=. .venv/bin/python3 experiment/run_experiment.py \

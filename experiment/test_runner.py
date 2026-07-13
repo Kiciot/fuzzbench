@@ -191,6 +191,27 @@ def test_trial_runner(trial_runner):
     assert trial_runner.cycle == 0
 
 
+def test_conduct_trial_final_sync_uses_distinct_cycle(trial_runner):
+    """The final sync must not overwrite the last periodic corpus archive."""
+    synced_cycles = []
+    fake_thread = mock.Mock()
+    fake_thread.is_alive.side_effect = [True, False]
+
+    with mock.patch.object(trial_runner, 'initialize_directories'), \
+         mock.patch.object(trial_runner, 'set_up_corpus_directories'), \
+         mock.patch.object(trial_runner, 'sleep_until_next_sync'), \
+         mock.patch.object(trial_runner, 'do_sync',
+                           side_effect=lambda: synced_cycles.append(
+                               trial_runner.cycle)), \
+         mock.patch('experiment.runner.threading.Thread',
+                    return_value=fake_thread):
+        trial_runner.conduct_trial()
+
+    assert synced_cycles == [0, 1, 2]
+    fake_thread.start.assert_called_once_with()
+    fake_thread.join.assert_called_once_with()
+
+
 @mock.patch('common.logs.log')
 def test_save_corpus_archive(_, trial_runner, fs):
     """Test that save_corpus_archive calls gsutil rsync on the corpus-archives
@@ -203,7 +224,7 @@ def test_save_corpus_archive(_, trial_runner, fs):
             'gsutil', 'cp', archive_name,
             posixpath.join(
                 'gs://bucket/experiment-name/experiment-folders/'
-                'benchmark-1-fuzzer_a/trial-1/corpus', archive_name)
+                'benchmark-1-fuzzer_a/trial-1/corpus-archives', archive_name)
         ]]
     assert not os.path.exists(archive_name)
 
@@ -227,9 +248,9 @@ def test_do_sync_unchanged(mocked_debug, trial_runner, fuzzer_module):
         assert mocked_popen.commands == [
             [
                 'gsutil', 'cp', '/corpus-archives/corpus-archive-1337.tar.gz',
-                ('gs://bucket/experiment-name/experiment-folders/'
-                 'benchmark-1-fuzzer_a/trial-1/corpus/'
-                 'corpus-archive-1337.tar.gz')
+                    ('gs://bucket/experiment-name/experiment-folders/'
+                     'benchmark-1-fuzzer_a/trial-1/corpus-archives/'
+                     'corpus-archive-1337.tar.gz')
             ],
             [
                 'gsutil', 'rsync', '-d', '-r', '/results-copy',
@@ -252,9 +273,9 @@ def test_do_sync_changed(mocked_execute, fs, trial_runner, fuzzer_module):
     assert mocked_execute.call_args_list == [
         mock.call([
             'gsutil', 'cp', '/corpus-archives/corpus-archive-1337.tar.gz',
-            ('gs://bucket/experiment-name/experiment-folders/'
-             'benchmark-1-fuzzer_a/trial-1/corpus/'
-             'corpus-archive-1337.tar.gz')
+                ('gs://bucket/experiment-name/experiment-folders/'
+                 'benchmark-1-fuzzer_a/trial-1/corpus-archives/'
+                 'corpus-archive-1337.tar.gz')
         ],
                   expect_zero=True),
         mock.call([

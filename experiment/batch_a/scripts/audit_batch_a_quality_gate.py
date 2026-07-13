@@ -44,13 +44,22 @@ HASH_FIELDS = [
 
 
 def latest_archive(trial_dir: Path) -> Path | None:
-    archives = list((trial_dir / "corpus-archives").glob("corpus-archive-*.tar.gz"))
+    archives = archives_in_order(trial_dir)
     if not archives:
         return None
-    def number(path: Path) -> int:
-        match = re.search(r"(\d+)\.tar\.gz$", path.name)
-        return int(match.group(1)) if match else -1
-    return max(archives, key=number)
+    return archives[-1]
+
+
+def archive_number(path: Path) -> int:
+    match = re.search(r"(\d+)\.tar\.gz$", path.name)
+    return int(match.group(1)) if match else -1
+
+
+def archives_in_order(trial_dir: Path) -> list[Path]:
+    return sorted(
+        (trial_dir / "corpus-archives").glob("corpus-archive-*.tar.gz"),
+        key=archive_number,
+    )
 
 
 def read_members(archive: Path) -> dict[str, bytes]:
@@ -68,6 +77,33 @@ def read_members(archive: Path) -> dict[str, bytes]:
             if extracted is not None:
                 result[Path(member.name).name] = extracted.read()
     return result
+
+
+def read_trial_members(trial_dir: Path) -> tuple[dict[str, bytes], dict[str, str]]:
+    """Reconstruct metadata from incremental corpus archives.
+
+    FuzzBench archives contain only files modified since the previous sync.
+    Configuration commonly appears only in the first runtime archive, while
+    stats and debug telemetry are updated later.  Read every archive in cycle
+    order and retain the newest occurrence of each member.
+    """
+    result: dict[str, bytes] = {}
+    sources: dict[str, str] = {}
+    for archive in archives_in_order(trial_dir):
+        for name, data in read_members(archive).items():
+            result[name] = data
+            sources[name] = archive.name
+    return result, sources
+
+
+def archive_file_count(archive: Path | None) -> int:
+    if archive is None:
+        return -1
+    try:
+        with tarfile.open(archive, "r:gz") as tar:
+            return sum(1 for member in tar if member.isfile())
+    except (OSError, tarfile.TarError):
+        return -1
 
 
 def pick(members: dict[str, bytes], names: list[str]) -> tuple[str, bytes] | tuple[None, None]:
@@ -123,6 +159,43 @@ def arm_rows(data: bytes | None) -> tuple[list[int], list[int]]:
     return selected, effective
 
 
+def debug_arm_rows(data: bytes | None) -> tuple[list[int], list[int]]:
+    """Parse policy-only evidence from AdaRare's debug fallback."""
+    if not data:
+        return [], []
+    selected: list[int] = []
+    effective: list[int] = []
+    for line in data.decode("utf-8", "replace").splitlines():
+        if not line.startswith("[bandit dbg] policy="):
+            continue
+        fields = dict(re.findall(r"([A-Za-z0-9_]+)=([^ ]+)", line))
+        try:
+            selected.append(int(fields["arm_cur"]))
+            effective.append(int(fields["arm_eff"]))
+        except (KeyError, ValueError):
+            continue
+    return selected, effective
+
+
+def select_arm_telemetry(
+        members: dict[str, bytes]) -> tuple[str | None, list[int], list[int], str]:
+    """Prefer standard telemetry, but use richer debug policy evidence.
+
+    The fallback is used only for policy/context/arm auditing.  Coverage,
+    reward, and performance values never come from the debug log.
+    """
+    standard_name, standard_data = pick(
+        members, [".adarare_bandit.csv", "adarare_bandit.csv"])
+    debug_name, debug_data = pick(
+        members, [".adarare_dbg.csv", "adarare_dbg.csv"])
+    standard_selected, standard_effective = arm_rows(standard_data)
+    debug_selected, debug_effective = debug_arm_rows(debug_data)
+    if len(debug_selected) > len(standard_selected):
+        return (debug_name, debug_selected, debug_effective,
+                "debug_policy_audit_fallback")
+    return (standard_name, standard_selected, standard_effective, "standard")
+
+
 def find_db(stage_dir: Path) -> Path | None:
     candidate = stage_dir / "experiment-data" / "local.db"
     return candidate if candidate.is_file() else None
@@ -160,6 +233,17 @@ def main() -> int:
         if db_path is None:
             continue
         failures: list[str] = []
+        runtime_image_path = stage_dir / "runtime_image_audit.tsv"
+        runtime_images: list[dict[str, str]] = []
+        if runtime_image_path.is_file():
+            with runtime_image_path.open(newline="", encoding="utf-8") as handle:
+                runtime_images = list(csv.DictReader(handle, delimiter="\t"))
+        expected_runtime_rows = len(expected_benchmarks) * len(FUZZERS)
+        if (len(runtime_images) != expected_runtime_rows or
+                any(row.get("status") != "PASS" for row in runtime_images)):
+            failures.append(
+                f"runtime image audit mismatch expected={expected_runtime_rows} "
+                f"actual={len(runtime_images)}")
         exp_root = experiment_root(stage_dir)
         if exp_root is None:
             failures.append("cannot uniquely locate experiment-folders root")
@@ -196,7 +280,13 @@ def main() -> int:
 
             trial_dir = exp_root / "experiment-folders" / f"{benchmark}-{fuzzer}" / f"trial-{trial_id}" if exp_root else Path("/missing")
             archive = latest_archive(trial_dir) if trial_dir.is_dir() else None
-            members = read_members(archive) if archive else {}
+            members, member_sources = read_trial_members(trial_dir) if trial_dir.is_dir() else ({}, {})
+            terminal_cycle = terminal_time // 900 if terminal_time >= 0 else -1
+            terminal_archive = (trial_dir / "corpus-archives" /
+                                f"corpus-archive-{terminal_cycle:04d}.tar.gz")
+            if not terminal_archive.is_file():
+                terminal_archive = None
+            terminal_archive_files = archive_file_count(terminal_archive)
             _, stats_data = pick(members, ["fuzzer_stats"])
             stats = stats_dict(stats_data)
             execs_done = int_value(stats, "execs_done")
@@ -212,17 +302,15 @@ def main() -> int:
                 row_failures.append("coverage_non_monotonic")
             if archive is None:
                 row_failures.append("missing_corpus_archive")
+            if terminal_archive_files <= 0:
+                row_failures.append("missing_or_empty_terminal_corpus_archive")
             if execs_done <= 0:
                 row_failures.append("execs_done_not_positive")
             if not queue_growth:
                 row_failures.append("queue_did_not_grow_beyond_initial_corpus")
 
             config_name, config_data = pick(members, [".adarare_config.json", "adarare_config.json"])
-            bandit_name, bandit_data = pick(members, [".adarare_bandit.csv", "adarare_bandit.csv"])
-            telemetry_source = "standard"
-            if bandit_data is None:
-                bandit_name, bandit_data = pick(members, [".adarare_dbg.csv", "adarare_dbg.csv"])
-                telemetry_source = "debug_policy_audit_fallback"
+            bandit_name, selected, effective, telemetry_source = select_arm_telemetry(members)
             config: dict[str, Any] = {}
             if config_data:
                 try:
@@ -231,9 +319,13 @@ def main() -> int:
                     row_failures.append("invalid_config_json")
             else:
                 row_failures.append("missing_adarare_config")
-            selected, effective = arm_rows(bandit_data)
             if not selected:
                 row_failures.append("missing_policy_arm_telemetry")
+            expected_windows = terminal_time * 1000 // 5000 if terminal_time > 0 else 0
+            minimum_windows = max(5, expected_windows * 9 // 10)
+            if len(selected) < minimum_windows:
+                row_failures.append(
+                    f"incomplete_policy_arm_telemetry:{len(selected)}<{minimum_windows}")
 
             expected = EXPECTED.get(fuzzer)
             policy_ok = bool(expected)
@@ -274,11 +366,16 @@ def main() -> int:
                 "corpus_count": corpus_count, "initial_seed_count": seed_counts.get(benchmark, -1),
                 "queue_growth": queue_growth, "status": status,
                 "failures": ";".join(row_failures), "archive": str(archive or ""),
+                "terminal_archive": str(terminal_archive or ""),
+                "terminal_archive_files": terminal_archive_files,
             })
             policy_audit.append({
                 "stage": stage, "benchmark": benchmark, "fuzzer": fuzzer,
                 "trial_id": trial_id, "telemetry_source": telemetry_source,
                 "config_file": config_name or "", "arm_file": bandit_name or "",
+                "config_archive": member_sources.get(config_name or "", ""),
+                "arm_archive": member_sources.get(bandit_name or "", ""),
+                "arm_rows": len(selected),
                 "policy": config.get("policy", ""), "enable_a6": config.get("enable_a6", ""),
                 "context_mode": config.get("context_mode", ""),
                 "static_arm": config.get("static_arm", ""), "window_ms": config.get("window_ms", ""),
@@ -309,6 +406,16 @@ def main() -> int:
                 })
                 if not ok:
                     failures.append(f"{benchmark}: build hash field {field} is not equivalent")
+            for image_row in sorted(
+                    (row for row in runtime_images if row["benchmark"] == benchmark),
+                    key=lambda row: row["fuzzer"]):
+                hash_audit.append({
+                    "stage": stage, "benchmark": benchmark,
+                    "field": f"runner_image_id:{image_row['fuzzer']}",
+                    "distinct_count": 1,
+                    "value": image_row["actual_image_id"],
+                    "status": image_row["status"],
+                })
             hash_audit.append({
                 "stage": stage, "benchmark": benchmark, "field": "pre_fuzz_coverage",
                 "distinct_count": len(set(values)), "value": "|".join(map(str, sorted(set(values)))),
@@ -316,6 +423,11 @@ def main() -> int:
             })
 
         connection.close()
+        log_path = stage_dir / "logs/run_experiment.log"
+        log_text = log_path.read_text(errors="replace") if log_path.is_file() else ""
+        coverage_failures = len(re.findall(r"Coverage run failed", log_text))
+        if coverage_failures:
+            failures.append(f"coverage_run_failures={coverage_failures}")
         stage_status[stage] = "PASS" if not failures else "FAIL"
         stage_failures[stage] = failures
 

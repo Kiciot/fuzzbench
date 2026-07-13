@@ -83,6 +83,10 @@ for exact in BATCH_A_PRE_RUN_FREEZE.md batch_a_pre_run_freeze.json SHA256SUMS; d
   [[ ! -e "$FREEZE/$exact" ]] || { echo "refusing to overwrite existing freeze artifact: $FREEZE/$exact" >&2; exit 1; }
 done
 mkdir -p "$FREEZE/artifacts"
+python3 "${BATCH}/scripts/check_batch_a_runtime_images.py" \
+  --provenance "$PROV_DIR/build_provenance.tsv" \
+  --output "$FREEZE/artifacts/runtime_image_audit.tsv" \
+  --benchmarks "${TARGETS[@]}"
 cp "${BATCH}/docs/BATCH_A_VARIANT_MANIFEST.md" "$FREEZE/artifacts/"
 cp "$QUALITY_ROOT/BATCH_A_QUALITY_GATE_AUDIT.md" "$FREEZE/artifacts/"
 cp "$QUALITY_ROOT"/quality_gate_*.tsv "$QUALITY_ROOT/quality_gate_decision.json" "$FREEZE/artifacts/"
@@ -156,11 +160,15 @@ sed -i \
   -e "s#report_filestore: .*#report_filestore: ${FORMAL_ROOT}/reports#" \
   "$CONFIG_RUN"
 EXP="baf500-$(date -u +%m%d%H%M)"
+WAVES=$(( (500 + RUNNERS_CPUS - 1) / RUNNERS_CPUS ))
+ESTIMATED_WALL_SECONDS=$(( WAVES * 86400 ))
 {
   echo "formal_root=$FORMAL_ROOT"
   echo "experiment=$EXP"
   echo "started_at=$(date -Is)"
-  echo "estimated_budget_completion=$(date -d '+24 hours' -Is)"
+  echo "runner_waves=$WAVES"
+  echo "estimated_budget_completion=$(date -d "+${ESTIMATED_WALL_SECONDS} seconds" -Is)"
+  echo "estimate_note=lower-bound from runner waves; measurer/report overhead is additional"
   echo "fuzzbench_commit=$FB_COMMIT"
   echo "aflplusplus_commit=$AFL_COMMIT"
   echo "targets=${TARGETS[*]}"
