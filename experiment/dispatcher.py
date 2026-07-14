@@ -183,7 +183,13 @@ def dispatcher_main():
     while True:
         time.sleep(LOOP_WAIT_SECONDS)
         if not scheduler_loop_thread.is_alive():
-            is_complete = not measurer_main_process.is_alive()
+            if not measurer_main_process.is_alive():
+                measurer_main_process.join()
+                if measurer_main_process.exitcode != 0:
+                    raise RuntimeError(
+                        'Measurer exited before a complete terminal flush: '
+                        f'exitcode={measurer_main_process.exitcode}')
+                is_complete = True
 
         # Generate periodic output reports.
         reporter.output_report(experiment.config,
@@ -196,6 +202,11 @@ def dispatcher_main():
 
     scheduler_loop_thread.join()
     measurer_main_process.join()
+    logs.info('Dispatcher process cleanup: scheduler_joined=%s '
+              'measurer_joined=%s measurer_exitcode=%s',
+              not scheduler_loop_thread.is_alive(),
+              not measurer_main_process.is_alive(),
+              measurer_main_process.exitcode)
 
     _record_experiment_time_ended(experiment.experiment_name)
     logs.info('Experiment ended.')

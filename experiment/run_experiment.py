@@ -601,9 +601,8 @@ class LocalDispatcher(BaseDispatcher):
             '"${EXPERIMENT_FILESTORE}/${EXPERIMENT}/input/" ${WORK} && '
             'mkdir ${WORK}/src && '
             'tar -xvzf ${WORK}/src.tar.gz -C ${WORK}/src && '
-            'PYTHONPATH=${WORK}/src python3 '
-            '${WORK}/src/experiment/dispatcher.py || '
-            '/bin/bash'  # Open shell if experiment fails.
+            'PYTHONPATH=${WORK}/src exec python3 '
+            '${WORK}/src/experiment/dispatcher.py'
         ]
         logs.info('Starting dispatcher with container name: %s', container_name)
         return new_process.execute(command, write_to_stdout=True)

@@ -27,7 +27,7 @@ import sys
 import tempfile
 import tarfile
 import time
-from typing import List, Dict, Tuple, Optional
+from typing import Dict, List, Optional, Set, Tuple
 import queue
 import psutil
 
@@ -64,6 +64,12 @@ SNAPSHOTS_BATCH_SAVE_SIZE = 100
 # - Override: export FUZZBENCH_MEASUREMENT_LOOP_WAIT=<seconds>
 _DEFAULT_TICK = max(60, int(experiment_utils.get_snapshot_seconds() // 2))
 MEASUREMENT_LOOP_WAIT = int(os.getenv('FUZZBENCH_MEASUREMENT_LOOP_WAIT', str(_DEFAULT_TICK)))
+MEASUREMENT_DRAIN_POLL_SECONDS = float(
+    os.getenv('FUZZBENCH_MEASUREMENT_DRAIN_POLL_SECONDS', '1'))
+MEASUREMENT_FLUSH_TIMEOUT_SECONDS = int(
+    os.getenv('FUZZBENCH_MEASUREMENT_FLUSH_TIMEOUT_SECONDS', '1800'))
+MEASUREMENT_WORKER_SHUTDOWN_TIMEOUT_SECONDS = int(
+    os.getenv('FUZZBENCH_MEASUREMENT_WORKER_SHUTDOWN_TIMEOUT_SECONDS', '120'))
 # [Backoff Configuration]
 # How long to wait before checking for a missing corpus archive again.
 MISSING_BACKOFF_SECONDS = 60
@@ -72,6 +78,76 @@ _next_check_at: Dict[Tuple[int, int], float] = {}
 
 # Regex for parsing corpus archive names (e.g. corpus-archive-0001.tar.gz)
 _CORPUS_RE = re.compile(r'^corpus-archive-(\d{4,6})\.tar\.gz$')
+
+MeasurementIdentifier = Tuple[int, int]
+
+
+class TerminalResponseFlushError(RuntimeError):
+    """Raised when terminal measurements cannot be durably flushed."""
+
+
+class MeasurementLifecycle:
+    """Tracks the explicit request/response/persistence protocol.
+
+    Counters are derived from unique ``(trial_id, cycle)`` identifiers. Retry
+    attempts and duplicate responses are recorded separately and therefore do
+    not make the successful logical counters diverge.
+    """
+
+    def __init__(self):
+        self.submitted: Set[MeasurementIdentifier] = set()
+        self.received: Set[MeasurementIdentifier] = set()
+        self.persisted: Set[MeasurementIdentifier] = set()
+        self.duplicate_responses = 0
+        self.retry_responses = 0
+
+    @staticmethod
+    def request_identifier(request) -> MeasurementIdentifier:
+        return (request.trial_id, request.cycle)
+
+    @staticmethod
+    def snapshot_identifier(snapshot: models.Snapshot) -> MeasurementIdentifier:
+        return (snapshot.trial_id, _time_to_cycle(snapshot.time))
+
+    def record_submission(self, request) -> None:
+        self.submitted.add(self.request_identifier(request))
+
+    def record_retry(self, request) -> None:
+        self.retry_responses += 1
+
+    def record_response(self, snapshot: models.Snapshot) -> bool:
+        identifier = self.snapshot_identifier(snapshot)
+        if identifier in self.received:
+            self.duplicate_responses += 1
+            return False
+        self.received.add(identifier)
+        return True
+
+    def record_persisted(self,
+                         identifiers: Set[MeasurementIdentifier]) -> None:
+        self.persisted.update(identifiers)
+
+    @property
+    def in_flight(self) -> Set[MeasurementIdentifier]:
+        return self.submitted - self.received
+
+    def successful_counts_match(self) -> bool:
+        return self.submitted == self.received == self.persisted
+
+    def diagnostics(self, expected_terminal, persisted_terminal) -> Dict:
+        missing_terminal = sorted(expected_terminal - persisted_terminal)
+        return {
+            'measurement_requests_submitted': len(self.submitted),
+            'measurement_responses_received': len(self.received),
+            'measurement_rows_persisted': len(self.persisted),
+            'measurement_requests_in_flight': len(self.in_flight),
+            'expected_terminal_measurements': len(expected_terminal),
+            'persisted_terminal_measurements': len(persisted_terminal),
+            'missing_terminal_measurements': missing_terminal,
+            'in_flight_measurements': sorted(self.in_flight),
+            'duplicate_responses': self.duplicate_responses,
+            'retry_responses': self.retry_responses,
+        }
 
 
 def _get_logical_trial_path(fuzzer: str, benchmark: str, trial_id: int) -> pathlib.Path:
@@ -142,9 +218,10 @@ def measure_main(experiment_config):
     experiment = experiment_config['experiment']
     max_total_time = experiment_config['max_total_time']
     measurers_cpus = experiment_config['measurers_cpus']
+    runners_cpus = experiment_config['runners_cpus']
     region_coverage = experiment_config['region_coverage']
     measure_manager_loop(experiment, max_total_time, measurers_cpus,
-                         region_coverage)
+                         runners_cpus, region_coverage)
 
     # Clean up resources.
     gc.collect()
@@ -887,8 +964,93 @@ def initialize_logs():
     })
 
 
+def get_expected_terminal_measurements(
+        experiment: str, max_cycle: int) -> Set[MeasurementIdentifier]:
+    """Return the terminal measurement identifier for every valid trial."""
+    with db_utils.session_scope() as session:
+        trial_ids = session.query(models.Trial.id).filter(
+            models.Trial.experiment == experiment,
+            models.Trial.preempted.is_(False),
+            models.Trial.time_started.isnot(None)).all()
+    return {(trial_id, max_cycle) for trial_id, in trial_ids}
+
+
+def get_persisted_terminal_measurements(
+        experiment: str, max_cycle: int) -> Set[MeasurementIdentifier]:
+    """Return terminal identifiers already committed to the database."""
+    terminal_time = experiment_utils.get_cycle_time(max_cycle)
+    with db_utils.session_scope() as session:
+        rows = session.query(models.Snapshot.trial_id).join(models.Trial).filter(
+            models.Trial.experiment == experiment,
+            models.Trial.preempted.is_(False),
+            models.Snapshot.time == terminal_time).all()
+    return {(trial_id, max_cycle) for trial_id, in rows}
+
+
+def persist_snapshots_exactly_once(experiment: str,
+                                   snapshots: List[models.Snapshot],
+                                   lifecycle: MeasurementLifecycle) -> int:
+    """Persist snapshots idempotently using Snapshot's composite primary key."""
+    unique = {}
+    for snapshot in snapshots:
+        key = (snapshot.trial_id, snapshot.time)
+        if key in unique:
+            lifecycle.duplicate_responses += 1
+            continue
+        unique[key] = snapshot
+    if not unique:
+        return 0
+
+    with db_utils.session_scope() as session:
+        existing = set(
+            session.query(models.Snapshot.trial_id, models.Snapshot.time).join(
+                models.Trial).filter(
+                    models.Trial.experiment == experiment,
+                    models.Snapshot.trial_id.in_(
+                        {trial_id for trial_id, _ in unique})).all())
+        new_snapshots = [
+            snapshot for key, snapshot in unique.items() if key not in existing
+        ]
+        lifecycle.duplicate_responses += len(unique) - len(new_snapshots)
+        session.add_all(new_snapshots)
+        session.commit()
+
+    confirmed = {
+        (trial_id, _time_to_cycle(snapshot_time))
+        for trial_id, snapshot_time in unique
+    }
+    lifecycle.record_persisted(confirmed)
+    return len(new_snapshots)
+
+
+def _describe_measurements(experiment: str,
+                           identifiers: Set[MeasurementIdentifier]) -> List[Dict]:
+    """Return campaign details for timeout diagnostics."""
+    if not identifiers:
+        return []
+    trial_ids = {trial_id for trial_id, _ in identifiers}
+    with db_utils.session_scope() as session:
+        rows = session.query(models.Trial.id, models.Trial.benchmark,
+                             models.Trial.fuzzer).filter(
+                                 models.Trial.experiment == experiment,
+                                 models.Trial.id.in_(trial_ids)).all()
+    trial_details = {
+        trial_id: (benchmark, fuzzer)
+        for trial_id, benchmark, fuzzer in rows
+    }
+    return [{
+        'trial_id': trial_id,
+        'benchmark': trial_details.get(trial_id, ('UNKNOWN', 'UNKNOWN'))[0],
+        'fuzzer': trial_details.get(trial_id, ('UNKNOWN', 'UNKNOWN'))[1],
+        'measurement_time': experiment_utils.get_cycle_time(cycle),
+    } for trial_id, cycle in sorted(identifiers)]
+
+
 def consume_snapshots_from_response_queue(
-        response_queue, queued_snapshots) -> List[models.Snapshot]:
+        response_queue,
+        queued_snapshots,
+        lifecycle: Optional[MeasurementLifecycle] = None,
+        shutdown_acks: Optional[Set[int]] = None) -> List[models.Snapshot]:
     """Consume response_queue, allows retry objects to retried, and
     return all measured snapshots in a list."""
     measured_snapshots = []
@@ -900,11 +1062,26 @@ def consume_snapshots_from_response_queue(
                 # the set so task can be retried in next loop iteration.
                 snapshot_identifier = (response_object.trial_id,
                                        response_object.cycle)
-                queued_snapshots.remove(snapshot_identifier)
+                queued_snapshots.discard(snapshot_identifier)
+                if lifecycle:
+                    lifecycle.record_retry(response_object)
                 logger.info('Reescheduling task for trial %s and cycle %s',
                             response_object.trial_id, response_object.cycle)
             elif isinstance(response_object, models.Snapshot):
+                snapshot_identifier = (
+                    response_object.trial_id,
+                    _time_to_cycle(response_object.time))
+                queued_snapshots.discard(snapshot_identifier)
+                if lifecycle and not lifecycle.record_response(response_object):
+                    continue
                 measured_snapshots.append(response_object)
+            elif isinstance(response_object,
+                            measurer_datatypes.WorkerShutdownAck):
+                if shutdown_acks is None:
+                    logger.error('Unexpected worker shutdown acknowledgement: %s',
+                                 response_object.worker_pid)
+                else:
+                    shutdown_acks.add(response_object.worker_pid)
             else:
                 logger.error('Type of response object not mapped! %s',
                              type(response_object))
@@ -914,13 +1091,25 @@ def consume_snapshots_from_response_queue(
 
 
 def measure_manager_inner_loop(experiment: str, max_cycle: int, request_queue,
-                               response_queue, queued_snapshots):
+                               response_queue, queued_snapshots,
+                               lifecycle: Optional[MeasurementLifecycle] = None):
     """Reads from database to determine which snapshots needs measuring. Write
     measurements tasks to request queue, get results from response queue, and
     write measured snapshots to database. Returns False if there's no more
     snapshots left to be measured"""
     initialize_logs()
-    # Read database to determine which snapshots needs measuring.
+    # Persist responses before querying for the next sequential snapshot.  This
+    # makes the committed DB state the source of truth for scheduling.
+    measured_snapshots = consume_snapshots_from_response_queue(
+        response_queue, queued_snapshots, lifecycle)
+    measured_cnt = len(measured_snapshots)
+    if measured_cnt:
+        if lifecycle:
+            persist_snapshots_exactly_once(experiment, measured_snapshots,
+                                           lifecycle)
+        else:
+            db_utils.add_all(measured_snapshots)
+
     unmeasured_snapshots = get_unmeasured_snapshots(experiment, max_cycle)
 
     if os.getenv('DEBUG_MEASURE_MANAGER') == '1':
@@ -929,10 +1118,6 @@ def measure_manager_inner_loop(experiment: str, max_cycle: int, request_queue,
     else:
         logger.debug('Retrieved %d unmeasured snapshots from measure manager',
                 len(unmeasured_snapshots))
-
-    # When there are no more snapshots left to be measured, should break loop.
-    if not unmeasured_snapshots:
-        return False
 
     # Write measurements requests to request queue
     dispatched = 0
@@ -964,15 +1149,9 @@ def measure_manager_inner_loop(experiment: str, max_cycle: int, request_queue,
 
             request_queue.put(unmeasured_snapshot)
             queued_snapshots.add(unmeasured_snapshot_identifier)
+            if lifecycle:
+                lifecycle.record_submission(unmeasured_snapshot)
             dispatched += 1
-
-    # Read results from response queue.
-    measured_snapshots = consume_snapshots_from_response_queue(
-        response_queue, queued_snapshots)
-
-    measured_cnt = len(measured_snapshots)
-    if measured_cnt:
-        db_utils.add_all(measured_snapshots)
 
     # Only emit INFO when there is real work done.
     if dispatched or measured_cnt:
@@ -980,7 +1159,7 @@ def measure_manager_inner_loop(experiment: str, max_cycle: int, request_queue,
     else:
         logger.debug('Measure manager tick: dispatched=%d measured=%d', dispatched, measured_cnt)
 
-    return True
+    return bool(unmeasured_snapshots or measured_cnt or queued_snapshots)
 
 
 def get_pool_args(measurers_cpus, runners_cpus):
@@ -1000,9 +1179,100 @@ def get_pool_args(measurers_cpus, runners_cpus):
     return (measurers_cpus, _process_init, (cores_queue,))
 
 
+def drain_terminal_measurements(experiment: str, max_cycle: int, request_queue,
+                                response_queue, queued_snapshots,
+                                lifecycle: MeasurementLifecycle,
+                                timeout_seconds: float,
+                                poll_seconds: float) -> Dict:
+    """Drain all measurements through the common terminal snapshot.
+
+    This loop deliberately continues after ``all_trials_ended``.  It does not
+    use Queue.empty(); completion is based on unique request, response, and
+    durable-row acknowledgements plus the expected terminal DB rows.
+    """
+    expected_terminal = get_expected_terminal_measurements(
+        experiment, max_cycle)
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        # Scheduling is closed at this point. Only acknowledge and persist work
+        # that was submitted while the experiment was RUNNING.
+        measured_snapshots = consume_snapshots_from_response_queue(
+            response_queue, queued_snapshots, lifecycle)
+        if measured_snapshots:
+            persist_snapshots_exactly_once(experiment, measured_snapshots,
+                                           lifecycle)
+        persisted_terminal = get_persisted_terminal_measurements(
+            experiment, max_cycle)
+        if (expected_terminal <= persisted_terminal and
+                lifecycle.successful_counts_match() and
+                not lifecycle.in_flight and not queued_snapshots):
+            diagnostics = lifecycle.diagnostics(expected_terminal,
+                                                persisted_terminal)
+            logger.info('Terminal measurement flush complete: %s',
+                        json.dumps(diagnostics, sort_keys=True))
+            return diagnostics
+
+        if time.monotonic() >= deadline:
+            diagnostics = lifecycle.diagnostics(expected_terminal,
+                                                persisted_terminal)
+            missing = expected_terminal - persisted_terminal
+            diagnostics['missing_campaigns'] = _describe_measurements(
+                experiment, missing)
+            diagnostics['in_flight_campaigns'] = _describe_measurements(
+                experiment, lifecycle.in_flight)
+            message = 'Terminal measurement flush timed out: ' + json.dumps(
+                diagnostics, sort_keys=True)
+            logger.error(message)
+            raise TerminalResponseFlushError(message)
+        time.sleep(poll_seconds)
+
+
+def shutdown_measurement_workers(experiment: str, pool, worker_results,
+                                 worker_count: int, request_queue,
+                                 response_queue, queued_snapshots,
+                                 lifecycle: MeasurementLifecycle,
+                                 timeout_seconds: float) -> Set[int]:
+    """Send one sentinel per worker, collect acknowledgements, and join."""
+    logger.info('Active child count before shutdown: %d',
+                len(multiprocessing.active_children()))
+    for _ in range(worker_count):
+        request_queue.put(
+            measurer_datatypes.ShutdownRequest('terminal_flush_complete'))
+
+    acknowledgements: Set[int] = set()
+    deadline = time.monotonic() + timeout_seconds
+    while len(acknowledgements) < worker_count:
+        snapshots = consume_snapshots_from_response_queue(
+            response_queue, queued_snapshots, lifecycle, acknowledgements)
+        if snapshots:
+            persist_snapshots_exactly_once(experiment, snapshots, lifecycle)
+        if len(acknowledgements) >= worker_count:
+            break
+        if time.monotonic() >= deadline:
+            message = (
+                'Measurer worker shutdown timed out: expected_acks=%d '
+                'received_acks=%d worker_pids=%s' %
+                (worker_count, len(acknowledgements),
+                 sorted(acknowledgements)))
+            logger.error(message)
+            raise TerminalResponseFlushError(message)
+        time.sleep(MEASUREMENT_DRAIN_POLL_SECONDS)
+
+    for result in worker_results:
+        remaining = max(0.01, deadline - time.monotonic())
+        result.get(timeout=remaining)
+    pool.close()
+    pool.join()
+    logger.info('Worker PIDs acknowledged shutdown: %s',
+                sorted(acknowledgements))
+    logger.info('Worker pool join status: PASS')
+    return acknowledgements
+
+
 def measure_manager_loop(experiment: str,
                          max_total_time: int,
                          measurers_cpus=None,
+                         runners_cpus=None,
                          region_coverage=False):  # pylint: disable=too-many-locals
     """Measure manager loop. Creates request and response queues, request
     measurements tasks from workers, retrieve measurement results from response
@@ -1012,7 +1282,11 @@ def measure_manager_loop(experiment: str,
         measurers_cpus = multiprocessing.cpu_count()
         logger.info('Number of measurer CPUs not passed as argument. using %d',
                     measurers_cpus)
-    with multiprocessing.Pool() as pool, multiprocessing.Manager() as manager:
+    manager = multiprocessing.Manager()
+    pool_args = get_pool_args(measurers_cpus, runners_cpus)
+    pool = multiprocessing.Pool(*pool_args)
+    normal_shutdown = False
+    try:
         logger.info('Setting up coverage binaries')
         set_up_coverage_binaries(pool, experiment)
         request_queue = manager.Queue()
@@ -1025,24 +1299,48 @@ def measure_manager_loop(experiment: str,
         }
         local_measure_worker = measure_worker.LocalMeasureWorker(config)
 
-        # Since each worker is going to be in an infinite loop, we dont need
-        # result return. Workers' life scope will end automatically when there
-        # are no more snapshots left to measure.
+        # Retain every AsyncResult so shutdown can verify that every worker
+        # consumed its sentinel and returned normally before the pool joins.
         logger.info('Starting measure worker loop for %d workers',
                     measurers_cpus)
-        for _ in range(measurers_cpus):
-            _result = pool.apply_async(local_measure_worker.measure_worker_loop)
+        worker_results = [
+            pool.apply_async(local_measure_worker.measure_worker_loop)
+            for _ in range(measurers_cpus)
+        ]
 
         max_cycle = _time_to_cycle(max_total_time)
         queued_snapshots = set()
+        lifecycle = MeasurementLifecycle()
         while not scheduler.all_trials_ended(experiment):
-            continue_inner_loop = measure_manager_inner_loop(
+            measure_manager_inner_loop(
                 experiment, max_cycle, request_queue, response_queue,
-                queued_snapshots)
-            if not continue_inner_loop:
-                break
+                queued_snapshots, lifecycle)
             time.sleep(MEASUREMENT_LOOP_WAIT)
-        logger.info('All trials ended. Ending measure manager loop')
+        logger.info('All trials ended. Stopping new measurement times and '
+                    'draining submitted/terminal responses')
+        drain_terminal_measurements(
+            experiment, max_cycle, request_queue, response_queue,
+            queued_snapshots, lifecycle, MEASUREMENT_FLUSH_TIMEOUT_SECONDS,
+            MEASUREMENT_DRAIN_POLL_SECONDS)
+        shutdown_measurement_workers(
+            experiment, pool, worker_results, measurers_cpus, request_queue,
+            response_queue, queued_snapshots, lifecycle,
+            MEASUREMENT_WORKER_SHUTDOWN_TIMEOUT_SECONDS)
+        normal_shutdown = True
+    finally:
+        if not normal_shutdown:
+            pool.terminate()
+            pool.join()
+        manager.shutdown()
+
+    unreaped_children = multiprocessing.active_children()
+    logger.info('Active child count after shutdown: %d',
+                len(unreaped_children))
+    logger.info('Unreaped child count: %d', len(unreaped_children))
+    if unreaped_children:
+        raise TerminalResponseFlushError(
+            'Unreaped measurer children after shutdown: ' + ','.join(
+                str(child.pid) for child in unreaped_children))
 
 
 def main():

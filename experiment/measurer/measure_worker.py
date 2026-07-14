@@ -1,6 +1,7 @@
 # Copyright 2024 Google LLC
 # ... (License header) ...
 """Module for measurer workers logic."""
+import os
 import time
 import traceback
 from typing import Dict, Optional
@@ -44,6 +45,14 @@ class BaseMeasureWorker:
                     logger.error('Worker failed to get task: %s', traceback.format_exc())
                     time.sleep(MEASUREMENT_TIMEOUT)
                     continue
+
+                if isinstance(request, measurer_datatypes.ShutdownRequest):
+                    worker_pid = os.getpid()
+                    logger.info('Measurer worker %d acknowledged shutdown',
+                                worker_pid)
+                    self.response_queue.put(
+                        measurer_datatypes.WorkerShutdownAck(worker_pid))
+                    return
 
                 logger.info(
                     'Measurer worker: Got request %s %s %d %d from request queue',

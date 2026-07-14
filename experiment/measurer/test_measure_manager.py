@@ -15,7 +15,10 @@
 import os
 import shutil
 from unittest import mock
+import multiprocessing
 import queue
+import threading
+import time
 
 import pytest
 
@@ -449,7 +452,10 @@ def test_consume_snapshot_type_from_response_queue():
     response_queue = queue.Queue()
     snapshot_identifier = (TRIAL_NUM, CYCLE)
     queued_snapshots_set = set([snapshot_identifier])
-    measured_snapshot = models.Snapshot(trial_id=TRIAL_NUM)
+    measured_snapshot = models.Snapshot(
+        trial_id=TRIAL_NUM,
+        time=experiment_utils.get_cycle_time(CYCLE),
+        edges_covered=1)
     response_queue.put(measured_snapshot)
     assert response_queue.qsize() == 1
     snapshots = measure_manager.consume_snapshots_from_response_queue(
@@ -471,12 +477,14 @@ def test_measure_manager_inner_loop_break_condition(
     assert not continue_inner_loop
 
 
+@mock.patch('experiment.measurer.measure_manager._corpus_archive_exists',
+            return_value=True)
 @mock.patch('experiment.measurer.measure_manager.get_unmeasured_snapshots')
 @mock.patch(
     'experiment.measurer.measure_manager.consume_snapshots_from_response_queue')
 def test_measure_manager_inner_loop_writes_to_request_queue(
         mocked_consume_snapshots_from_response_queue,
-        mocked_get_unmeasured_snapshots):
+        mocked_get_unmeasured_snapshots, _):
     """Tests that the measure manager inner loop is writing measurement tasks to
     request queue."""
     mocked_get_unmeasured_snapshots.return_value = [
@@ -490,13 +498,15 @@ def test_measure_manager_inner_loop_writes_to_request_queue(
     assert request_queue.qsize() == 1
 
 
+@mock.patch('experiment.measurer.measure_manager._corpus_archive_exists',
+            return_value=True)
 @mock.patch('experiment.measurer.measure_manager.get_unmeasured_snapshots')
 @mock.patch(
     'experiment.measurer.measure_manager.consume_snapshots_from_response_queue')
 @mock.patch('database.utils.add_all')
 def test_measure_manager_inner_loop_dont_write_to_db(
         mocked_add_all, mocked_consume_snapshots_from_response_queue,
-        mocked_get_unmeasured_snapshots):
+        mocked_get_unmeasured_snapshots, _):
     """Tests that the measure manager inner loop does not call add_all to write
     to the database, when there are no measured snapshots to be written."""
     mocked_get_unmeasured_snapshots.return_value = [
@@ -510,13 +520,15 @@ def test_measure_manager_inner_loop_dont_write_to_db(
     mocked_add_all.not_called()
 
 
+@mock.patch('experiment.measurer.measure_manager._corpus_archive_exists',
+            return_value=True)
 @mock.patch('experiment.measurer.measure_manager.get_unmeasured_snapshots')
 @mock.patch(
     'experiment.measurer.measure_manager.consume_snapshots_from_response_queue')
 @mock.patch('database.utils.add_all')
 def test_measure_manager_inner_loop_writes_to_db(
         mocked_add_all, mocked_consume_snapshots_from_response_queue,
-        mocked_get_unmeasured_snapshots):
+        mocked_get_unmeasured_snapshots, _):
     """Tests that the measure manager inner loop calls add_all to write
     to the database, when there are measured snapshots to be written."""
     mocked_get_unmeasured_snapshots.return_value = [
@@ -529,3 +541,168 @@ def test_measure_manager_inner_loop_writes_to_db(
     measure_manager.measure_manager_inner_loop('experiment', 1, request_queue,
                                                response_queue, set())
     mocked_add_all.assert_called_with([snapshot_model])
+
+
+def _request(trial_id, cycle=1):
+    return measurer_datatypes.SnapshotMeasureRequest(
+        FUZZER, BENCHMARK, trial_id, cycle)
+
+
+def _snapshot(trial_id, cycle=1):
+    return models.Snapshot(
+        trial_id=trial_id,
+        time=experiment_utils.get_cycle_time(cycle),
+        edges_covered=trial_id)
+
+
+def _fake_terminal_flush(monkeypatch, requests, delayed_snapshots,
+                         timeout=1):
+    """Run the terminal state machine with deterministic in-memory queues."""
+    expected = {(request.trial_id, request.cycle) for request in requests}
+    persisted = set()
+    lifecycle = measure_manager.MeasurementLifecycle()
+    queued = set(expected)
+    for request in requests:
+        lifecycle.record_submission(request)
+    response_queue = queue.Queue()
+
+    monkeypatch.setattr(measure_manager, 'get_expected_terminal_measurements',
+                        lambda _experiment, _cycle: expected)
+    monkeypatch.setattr(measure_manager, 'get_persisted_terminal_measurements',
+                        lambda _experiment, _cycle: set(persisted))
+    monkeypatch.setattr(measure_manager, 'get_unmeasured_snapshots',
+                        lambda _experiment, _cycle: [])
+
+    def persist(_experiment, snapshots, state):
+        identifiers = {
+            state.snapshot_identifier(snapshot) for snapshot in snapshots
+        }
+        persisted.update(identifiers)
+        state.record_persisted(identifiers)
+        return len(identifiers)
+
+    monkeypatch.setattr(measure_manager, 'persist_snapshots_exactly_once',
+                        persist)
+
+    def publish():
+        time.sleep(0.02)
+        for snapshot in delayed_snapshots:
+            response_queue.put(snapshot)
+
+    publisher = threading.Thread(target=publish)
+    publisher.start()
+    diagnostics = measure_manager.drain_terminal_measurements(
+        'experiment', 1, queue.Queue(), response_queue, queued, lifecycle,
+        timeout, 0.001)
+    publisher.join()
+    return diagnostics, lifecycle
+
+
+def test_measurer_drains_delayed_terminal_responses(monkeypatch):
+    """Ten delayed final responses are persisted after trials have ended."""
+    requests = [_request(trial_id) for trial_id in range(1, 11)]
+    diagnostics, lifecycle = _fake_terminal_flush(
+        monkeypatch, requests,
+        [_snapshot(trial_id) for trial_id in range(1, 11)])
+    assert diagnostics['measurement_requests_submitted'] == 10
+    assert diagnostics['measurement_responses_received'] == 10
+    assert diagnostics['measurement_rows_persisted'] == 10
+    assert diagnostics['measurement_requests_in_flight'] == 0
+    assert diagnostics['persisted_terminal_measurements'] == 10
+    assert lifecycle.successful_counts_match()
+
+
+def test_all_trials_ended_does_not_drop_inflight_measurements(monkeypatch):
+    """An in-flight response remains required after all_trials_ended."""
+    request = _request(1)
+    diagnostics, lifecycle = _fake_terminal_flush(
+        monkeypatch, [request], [_snapshot(1)])
+    assert diagnostics['missing_terminal_measurements'] == []
+    assert not lifecycle.in_flight
+    assert lifecycle.submitted == lifecycle.received == lifecycle.persisted
+
+
+def test_terminal_measurements_persist_exactly_once(db_experiment,
+                                                    experiment_config):
+    """Duplicate responses produce one row under the composite DB key."""
+    trial = models.Trial(
+        id=TRIAL_NUM,
+        experiment=experiment_config['experiment'],
+        fuzzer=FUZZER,
+        benchmark=BENCHMARK,
+        time_started=measure_manager.scheduler.datetime_now(),
+        time_ended=measure_manager.scheduler.datetime_now())
+    db_utils.add_all([trial])
+    lifecycle = measure_manager.MeasurementLifecycle()
+    request = _request(TRIAL_NUM)
+    lifecycle.record_submission(request)
+    response_queue = queue.Queue()
+    response_queue.put(_snapshot(TRIAL_NUM))
+    response_queue.put(_snapshot(TRIAL_NUM))
+    snapshots = measure_manager.consume_snapshots_from_response_queue(
+        response_queue, {(TRIAL_NUM, CYCLE)}, lifecycle)
+    assert len(snapshots) == 1
+    assert measure_manager.persist_snapshots_exactly_once(
+        experiment_config['experiment'], snapshots, lifecycle) == 1
+    with db_utils.session_scope() as session:
+        rows = session.query(models.Snapshot).filter_by(
+            trial_id=TRIAL_NUM,
+            time=experiment_utils.get_cycle_time(CYCLE)).all()
+    assert len(rows) == 1
+    assert lifecycle.duplicate_responses == 1
+    assert lifecycle.successful_counts_match()
+
+
+def test_flush_timeout_reports_missing_campaigns(monkeypatch):
+    """A bounded timeout fails with exact missing measurement diagnostics."""
+    requests = [_request(trial_id) for trial_id in range(1, 11)]
+    expected = {(request.trial_id, request.cycle) for request in requests}
+    lifecycle = measure_manager.MeasurementLifecycle()
+    for request in requests:
+        lifecycle.record_submission(request)
+    received = [_snapshot(trial_id) for trial_id in range(1, 10)]
+    for snapshot in received:
+        lifecycle.record_response(snapshot)
+    persisted = {lifecycle.snapshot_identifier(snapshot) for snapshot in received}
+    lifecycle.record_persisted(persisted)
+    monkeypatch.setattr(measure_manager, 'get_expected_terminal_measurements',
+                        lambda _experiment, _cycle: expected)
+    monkeypatch.setattr(measure_manager, 'get_persisted_terminal_measurements',
+                        lambda _experiment, _cycle: persisted)
+    monkeypatch.setattr(measure_manager, 'get_unmeasured_snapshots',
+                        lambda _experiment, _cycle: [])
+    monkeypatch.setattr(measure_manager, '_describe_measurements',
+                        lambda _experiment, identifiers: sorted(identifiers))
+    with pytest.raises(measure_manager.TerminalResponseFlushError) as error:
+        measure_manager.drain_terminal_measurements(
+            'experiment', 1, queue.Queue(), queue.Queue(), {(10, 1)},
+            lifecycle, 0.01, 0.001)
+    message = str(error.value)
+    assert '"measurement_requests_submitted": 10' in message
+    assert '"measurement_responses_received": 9' in message
+    assert '"measurement_rows_persisted": 9' in message
+    assert '"missing_terminal_measurements": [[10, 1]]' in message
+
+
+def test_measurer_workers_are_reaped():
+    """Every worker acknowledges its sentinel and the pool joins cleanly."""
+    manager = multiprocessing.Manager()
+    request_queue = manager.Queue()
+    response_queue = manager.Queue()
+    worker = measure_manager.measure_worker.LocalMeasureWorker({
+        'request_queue': request_queue,
+        'response_queue': response_queue,
+        'region_coverage': False,
+    })
+    pool = multiprocessing.Pool(processes=2)
+    results = [pool.apply_async(worker.measure_worker_loop) for _ in range(2)]
+    acknowledgements = measure_manager.shutdown_measurement_workers(
+        'experiment', pool, results, 2, request_queue, response_queue, set(),
+        measure_manager.MeasurementLifecycle(), 5)
+    manager.shutdown()
+    assert len(acknowledgements) == 2
+    assert all(result.ready() and result.successful() for result in results)
+    assert not [
+        child for child in multiprocessing.active_children()
+        if child.pid in acknowledgements
+    ]

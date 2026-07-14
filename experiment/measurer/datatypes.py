@@ -19,3 +19,9 @@ SnapshotMeasureRequest = collections.namedtuple(
 
 RetryRequest = collections.namedtuple(
     'RetryRequest', ['fuzzer', 'benchmark', 'trial_id', 'cycle'])
+
+# Explicit worker shutdown protocol.  Queue state (in particular empty()) is
+# not a synchronization primitive for multiprocessing queues, so every worker
+# receives a sentinel and acknowledges it with its PID before the pool joins.
+ShutdownRequest = collections.namedtuple('ShutdownRequest', ['reason'])
+WorkerShutdownAck = collections.namedtuple('WorkerShutdownAck', ['worker_pid'])
