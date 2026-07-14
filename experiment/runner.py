@@ -279,6 +279,15 @@ class TrialRunner:  # pylint: disable=too-many-instance-attributes
             _copy_custom_seed_corpus(input_corpus)
 
         _clean_seed_corpus(input_corpus)
+        # Some fuzzers add a deterministic fallback seed when the benchmark
+        # corpus is empty.  Run that idempotent preparation hook before the
+        # time-zero sync so the measured baseline is the corpus the fuzzer
+        # actually consumes, rather than an empty pre-hook snapshot.
+        fuzzer_module = get_fuzzer_module(self.fuzzer)
+        prepare_seed_corpus = getattr(fuzzer_module, 'prepare_seed_corpus',
+                                      None)
+        if prepare_seed_corpus is not None:
+            prepare_seed_corpus(input_corpus)
         # Ensure seeds are in output corpus.
         os.rmdir(self.output_corpus)
         shutil.copytree(input_corpus, self.output_corpus)

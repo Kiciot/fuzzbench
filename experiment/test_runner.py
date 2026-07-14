@@ -191,6 +191,56 @@ def test_trial_runner(trial_runner):
     assert trial_runner.cycle == 0
 
 
+def test_set_up_corpus_prepares_effective_seed_before_initial_copy(
+        trial_runner, fs):
+    """Time-zero output must contain the fuzzer's effective fallback seed."""
+    os.environ['SEED_CORPUS_DIR'] = '/out/seeds'
+    fs.create_dir('/out/seeds')
+
+    class FuzzerWithSeedHook:
+        """Fake fuzzer with the same idempotent seed hook as AdaRare."""
+
+        @staticmethod
+        def prepare_seed_corpus(input_corpus):
+            with open(os.path.join(input_corpus, 'default_seed'),
+                      'w', encoding='utf-8') as seed_file:
+                seed_file.write('hi')
+
+    with mock.patch('experiment.runner.get_fuzzer_module',
+                    return_value=FuzzerWithSeedHook), \
+         mock.patch('common.fuzzer_utils.get_fuzz_target_binary',
+                    return_value=None):
+        trial_runner.set_up_corpus_directories()
+
+    for corpus_dir in ('/out/seeds', trial_runner.output_corpus):
+        seed_path = os.path.join(corpus_dir, 'default_seed')
+        with open(seed_path, encoding='utf-8') as seed_file:
+            assert seed_file.read() == 'hi'
+
+
+def test_adarare_seed_hook_is_idempotent_and_preserves_nonempty_corpus(
+        tmp_path):
+    """The hook adds only AFL's existing fallback and changes no real seed."""
+    from fuzzers.adarare_full import fuzzer as adarare_fuzzer
+
+    empty = tmp_path / 'empty'
+    empty.mkdir()
+    adarare_fuzzer.prepare_seed_corpus(str(empty))
+    assert (empty / 'default_seed').read_text(encoding='utf-8') == 'hi'
+    adarare_fuzzer.prepare_seed_corpus(str(empty))
+    assert sorted(path.name for path in empty.iterdir()) == ['default_seed']
+
+    nonempty = tmp_path / 'nonempty'
+    nonempty.mkdir()
+    original = nonempty / 'original-seed'
+    original.write_bytes(b'original')
+    adarare_fuzzer.prepare_seed_corpus(str(nonempty))
+    assert sorted(path.name for path in nonempty.iterdir()) == [
+        'original-seed'
+    ]
+    assert original.read_bytes() == b'original'
+
+
 def test_conduct_trial_final_sync_uses_distinct_cycle(trial_runner):
     """The final sync must not overwrite the last periodic corpus archive."""
     synced_cycles = []

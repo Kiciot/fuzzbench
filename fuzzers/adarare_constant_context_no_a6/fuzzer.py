@@ -29,6 +29,11 @@ ADARARE_ARTIFACT_NAMES = (
 )
 
 
+def prepare_seed_corpus(input_corpus):
+    """Materialize AFL's existing fallback seed before time-zero sync."""
+    utils.create_seed_file_for_empty_corpus(input_corpus)
+
+
 def archive_adarare_artifacts(output_corpus):
     """Copy AdaRare telemetry into default/ with non-hidden names."""
     default_dir = os.path.join(output_corpus, 'default')
