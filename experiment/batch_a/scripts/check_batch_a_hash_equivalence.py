@@ -76,6 +76,7 @@ EQUIVALENT_FIELDS = [
     "cmplog_binary_sha256",
     "initial_corpus_manifest_sha256",
     "seed_file_count",
+    "initial_corpus_source_archive_sha256",
     "dictionary_manifest_sha256",
     "dictionary_file_count",
 ]
@@ -85,6 +86,8 @@ GLOBAL_IDENTICAL_FIELDS = [
     "builder_dockerfile_sha256",
     "fuzzer_py_sha256",
     "normalized_runner_sha256",
+    "runtime_runner_py_sha256",
+    "runtime_fuzzer_py_sha256",
 ]
 
 

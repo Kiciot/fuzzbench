@@ -70,6 +70,21 @@ done
 
 mkdir -p "$LOGS" "${BATCH}/manifests"
 mkdir -p "${OUT}/locks"
+[[ -z "$(git -C "$FB" status --porcelain)" ]] || {
+  echo "FuzzBench worktree is not clean" >&2
+  exit 1
+}
+FB_COMMIT="$(git -C "$FB" rev-parse HEAD)"
+FB_UPSTREAM_COMMIT="$(git -C "$FB" rev-parse '@{upstream}')"
+[[ "$FB_COMMIT" == "$FB_UPSTREAM_COMMIT" ]] || {
+  echo "FuzzBench HEAD does not match upstream" >&2
+  exit 1
+}
+{
+  echo "fuzzbench_commit=$FB_COMMIT"
+  echo "fuzzbench_upstream_commit=$FB_UPSTREAM_COMMIT"
+  echo "worktree_clean=true"
+} > "${OUT}/repo_state.txt"
 printf 'benchmark\tfuzzer\tmake_target\tstart_time\tend_time\tduration_sec\texit_code\tstatus\tlog_path\n' > "$SUMMARY"
 printf 'benchmark\tmake_target\tstart_time\tend_time\tduration_sec\texit_code\tstatus\tlog_path\n' > "$COVERAGE_SUMMARY"
 printf '%s\n' "$OUT" > "${BATCH}/manifests/latest_build_matrix.txt"
@@ -215,6 +230,7 @@ core_records="$(awk -F '\t' 'NR>1 && $1!="freetype2_ftfuzzer" {n++} END {print n
 core_pass="$(awk -F '\t' 'NR>1 && $1!="freetype2_ftfuzzer" && $8=="PASS" {n++} END {print n+0}' "$SUMMARY")"
 fallback_pass="$(awk -F '\t' 'NR>1 && $1=="freetype2_ftfuzzer" && $8=="PASS" {n++} END {print n+0}' "$SUMMARY")"
 {
+  echo "fuzzbench_commit=$FB_COMMIT"
   echo "records=$records"
   echo "failures=$failures"
   echo "core_records=$core_records"

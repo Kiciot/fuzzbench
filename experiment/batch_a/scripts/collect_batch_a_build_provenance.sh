@@ -31,7 +31,7 @@ BENCHMARKS=(
   openh264_decoder_fuzzer freetype2_ftfuzzer
 )
 
-printf 'benchmark\tfuzzer\tfuzzbench_commit\taflplusplus_commit\tbenchmark_revision\tbenchmark_yaml_sha256\tbenchmark_dockerfile_sha256\tbuilder_image_id\tbuilder_image_digest\trunner_image_id\trunner_image_digest\ttarget_binary_sha256\tcoverage_binary_sha256\tcmplog_binary_sha256\tinitial_corpus_manifest_sha256\tseed_file_count\tdictionary_manifest_sha256\tdictionary_file_count\tcompiler_version\tllvm_version\tsanitizer\tvariant_env\tbuilder_dockerfile_sha256\tfuzzer_py_sha256\tnormalized_runner_sha256\n' > "$PROV"
+printf 'benchmark\tfuzzer\tfuzzbench_commit\taflplusplus_commit\tbenchmark_revision\tbenchmark_yaml_sha256\tbenchmark_dockerfile_sha256\tbuilder_image_id\tbuilder_image_digest\trunner_image_id\trunner_image_digest\ttarget_binary_sha256\tcoverage_binary_sha256\tcmplog_binary_sha256\tinitial_corpus_manifest_sha256\tseed_file_count\tinitial_corpus_source_archive_sha256\tdictionary_manifest_sha256\tdictionary_file_count\tcompiler_version\tllvm_version\tsanitizer\tvariant_env\tbuilder_dockerfile_sha256\tfuzzer_py_sha256\tnormalized_runner_sha256\truntime_runner_py_sha256\truntime_fuzzer_py_sha256\n' > "$PROV"
 printf 'benchmark\tfuzzer\tseed_path\tsha256\n' > "$SEEDS"
 printf 'benchmark\tfuzzer\tdictionary_path\tsha256\n' > "$DICTS"
 
@@ -47,13 +47,31 @@ inside_hash() {
   inside "$1" "test -f '$2' && sha256sum '$2' | awk '{print \$1}'"
 }
 inside_manifest() {
-  local image="$1" kind="$2"
+  local image="$1" kind="$2" benchmark="${3:-}" fuzzer="${4:-}" target="${5:-}"
   case "$kind" in
     seeds)
-      inside "$image" "if test -d /out/seeds; then find /out/seeds -type f -printf '%P\\0' | sort -z | while IFS= read -r -d '' p; do sha256sum \"/out/seeds/\$p\" | awk -v p=\"\$p\" '{print \$1 \"  \" p}'; done; fi"
+      docker run --rm --entrypoint /bin/bash \
+        -e FUZZ_OUTSIDE_EXPERIMENT=1 \
+        -e "FUZZER=${fuzzer}" \
+        -e "BENCHMARK=${benchmark}" \
+        -e "FUZZ_TARGET=${target}" \
+        -e OUTPUT_CORPUS_DIR=/tmp/effective-output-corpus \
+        -e SEED_CORPUS_DIR=/out/seeds \
+        "$image" -lc '
+          set -e
+          if ! PYTHONPATH=/src python3 -c "from experiment.runner import TrialRunner; runner = TrialRunner(); runner.initialize_directories(); runner.set_up_corpus_directories()" >/tmp/effective-seed-preparation.log 2>&1; then
+            cat /tmp/effective-seed-preparation.log >&2
+            exit 1
+          fi
+          find /out/seeds -type f -printf "%P\\0" | sort -z |
+            while IFS= read -r -d "" p; do
+              sha="$(sha256sum "/out/seeds/$p")"
+              printf "%s  %s\\n" "${sha%% *}" "$p"
+            done
+        '
       ;;
     dicts)
-      inside "$image" "find /out -type f -name '*.dict' -printf '%P\\0' | sort -z | while IFS= read -r -d '' p; do sha256sum \"/out/\$p\" | awk -v p=\"\$p\" '{print \$1 \"  \" p}'; done"
+      inside "$image" "find /out -type f -name '*.dict' -printf '%P\\0' | sort -z | while IFS= read -r -d '' p; do sha=\"\$(sha256sum \"/out/\$p\")\"; printf '%s  %s\\n' \"\${sha%% *}\" \"\$p\"; done"
       ;;
     *) return 2 ;;
   esac
@@ -62,6 +80,19 @@ manifest_sha() { sha256sum "$1" | awk '{print $1}'; }
 
 cd "$FB"
 FB_COMMIT="$(git rev-parse HEAD)"
+[[ -f "${BUILD_DIR}/repo_state.txt" ]] || {
+  echo "missing build repo state: ${BUILD_DIR}/repo_state.txt" >&2
+  exit 1
+}
+BUILD_FB_COMMIT="$(sed -n 's/^fuzzbench_commit=//p' "${BUILD_DIR}/repo_state.txt")"
+[[ "$BUILD_FB_COMMIT" =~ ^[0-9a-f]{40}$ && "$FB_COMMIT" == "$BUILD_FB_COMMIT" ]] || {
+  echo "FuzzBench HEAD does not match build commit: head=${FB_COMMIT} build=${BUILD_FB_COMMIT}" >&2
+  exit 1
+}
+[[ -z "$(git status --porcelain)" ]] || {
+  echo "FuzzBench worktree is not clean" >&2
+  exit 1
+}
 AFL_COMMIT="$(grep 'rev-parse HEAD' fuzzers/adarare_full/builder.Dockerfile | grep -oE '[0-9a-f]{40}' | head -1 || true)"
 [[ "$AFL_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid AFL++ pin: $AFL_COMMIT" >&2; exit 1; }
 
@@ -92,12 +123,18 @@ for benchmark in "${BENCHMARKS[@]}"; do
 
     seed_tmp="$(mktemp)"
     dict_tmp="$(mktemp)"
-    inside_manifest "$runner_image" seeds > "$seed_tmp"
+    inside_manifest "$runner_image" seeds "$benchmark" "$fuzzer" "$target" > "$seed_tmp"
     inside_manifest "$runner_image" dicts > "$dict_tmp"
     seed_manifest_sha="$(manifest_sha "$seed_tmp")"
     dict_manifest_sha="$(manifest_sha "$dict_tmp")"
     seed_count="$(wc -l < "$seed_tmp" | tr -d ' ')"
     dict_count="$(wc -l < "$dict_tmp" | tr -d ' ')"
+    (( seed_count > 0 )) || {
+      echo "effective runtime seed corpus is empty for $benchmark/$fuzzer" >&2
+      exit 1
+    }
+    seed_archive_sha="$(inside_hash "$runner_image" "/out/${target}_seed_corpus.zip" || true)"
+    [[ "$seed_archive_sha" =~ ^[0-9a-f]{64}$ ]] || seed_archive_sha="NO_SEED_CORPUS_ARCHIVE"
     while read -r sha path; do
       [[ -n "${sha:-}" ]] || continue
       printf '%s\t%s\t%s\t%s\n' "$benchmark" "$fuzzer" "$path" "$sha" >> "$SEEDS"
@@ -115,14 +152,21 @@ for benchmark in "${BENCHMARKS[@]}"; do
     builder_docker_sha="$(sha256sum "fuzzers/${fuzzer}/builder.Dockerfile" | awk '{print $1}')"
     fuzzer_py_sha="$(sha256sum "fuzzers/${fuzzer}/fuzzer.py" | awk '{print $1}')"
     normalized_runner_sha="$(grep -v '^ENV AFL_ADARARE_' "fuzzers/${fuzzer}/runner.Dockerfile" | sha256sum | awk '{print $1}')"
+    runtime_runner_py_sha="$(inside_hash "$runner_image" "/src/experiment/runner.py")"
+    runtime_fuzzer_py_sha="$(inside_hash "$runner_image" "/src/fuzzers/${fuzzer}/fuzzer.py")"
+    [[ "$runtime_runner_py_sha" =~ ^[0-9a-f]{64}$ && "$runtime_fuzzer_py_sha" =~ ^[0-9a-f]{64}$ ]] || {
+      echo "missing runtime source snapshot for $benchmark/$fuzzer" >&2
+      exit 1
+    }
 
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$benchmark" "$fuzzer" "$FB_COMMIT" "$AFL_COMMIT" "$revision" "$yaml_sha" "$dockerfile_sha" \
       "$(image_id "$builder_image")" "$(image_digest "$builder_image")" \
       "$(image_id "$runner_image")" "$(image_digest "$runner_image")" \
       "$target_sha" "$coverage_sha" "$cmplog_sha" "$seed_manifest_sha" "$seed_count" \
-      "$dict_manifest_sha" "$dict_count" "$compiler" "$llvm" "$sanitizer" "$variant_env" \
-      "$builder_docker_sha" "$fuzzer_py_sha" "$normalized_runner_sha" >> "$PROV"
+      "$seed_archive_sha" "$dict_manifest_sha" "$dict_count" "$compiler" "$llvm" "$sanitizer" "$variant_env" \
+      "$builder_docker_sha" "$fuzzer_py_sha" "$normalized_runner_sha" \
+      "$runtime_runner_py_sha" "$runtime_fuzzer_py_sha" >> "$PROV"
     rm -f "$seed_tmp" "$dict_tmp"
     echo "collected $benchmark/$fuzzer"
   done
