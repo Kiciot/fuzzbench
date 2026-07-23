@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM gcr.io/fuzzbench/base-image
+ARG image_namespace=gcr.io/fuzzbench-batchb-focused
+FROM ${image_namespace}/base-image
 
 # This makes interactive docker runs painless:
 ENV LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/out"
