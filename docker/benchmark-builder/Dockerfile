@@ -2,9 +2,10 @@
 # Licensed under the Apache License, Version 2.0
 
 ARG parent_image
+ARG image_namespace=gcr.io/fuzzbench
 
 # Using multi-stage build to copy latest Python 3.
-FROM gcr.io/fuzzbench/base-image AS base-image
+FROM ${image_namespace}/base-image AS base-image
 
 FROM $parent_image
 

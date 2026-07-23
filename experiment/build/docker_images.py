@@ -18,11 +18,16 @@ import os
 from common import yaml_utils
 from common.utils import ROOT_DIR
 
+IMAGE_NAMESPACE = (os.getenv('FUZZBENCH_IMAGE_NAMESPACE', '').strip().rstrip('/')
+                   or 'gcr.io/fuzzbench')
+
 
 def _substitute(template, fuzzer, benchmark):
     """Replaces {fuzzer} or {benchmark} with |fuzzer| or |benchmark| in
     |template| string."""
-    return template.format(fuzzer=fuzzer, benchmark=benchmark)
+    return template.format(fuzzer=fuzzer,
+                           benchmark=benchmark).replace(
+                               'gcr.io/fuzzbench', IMAGE_NAMESPACE)
 
 
 def _instantiate_image_obj(name_template, obj_template, fuzzer, benchmark):

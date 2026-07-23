@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM gcr.io/fuzzbench/base-image
+ARG image_namespace=gcr.io/fuzzbench
+
+FROM ${image_namespace}/base-image
 
 ENV WORK /work
 ENV SRC $WORK/src

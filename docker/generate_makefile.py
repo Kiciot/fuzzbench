@@ -21,7 +21,11 @@ from common import benchmark_utils
 from common import fuzzer_utils
 from experiment.build import docker_images
 
-BASE_TAG = 'gcr.io/fuzzbench'
+_IMAGE_NAMESPACE = os.getenv('FUZZBENCH_IMAGE_NAMESPACE', '').strip().rstrip('/')
+BASE_TAG = _IMAGE_NAMESPACE or 'gcr.io/fuzzbench'
+IMAGE_NAMESPACE_ARG = (_IMAGE_NAMESPACE
+                       if _IMAGE_NAMESPACE and _IMAGE_NAMESPACE !=
+                       'gcr.io/fuzzbench' else '')
 BENCHMARK_DIR = benchmark_utils.BENCHMARKS_DIR
 
 
@@ -120,6 +124,9 @@ def get_rules_for_image(name, image):
     section += '\tdocker build \\\n'
     section += '\t--tag ' + os.path.join(BASE_TAG, image['tag']) + ' \\\n'
     section += '\t--build-arg BUILDKIT_INLINE_CACHE=1 \\\n'
+    if IMAGE_NAMESPACE_ARG:
+        section += ('\t--build-arg image_namespace=' + IMAGE_NAMESPACE_ARG +
+                    ' \\\n')
     section += '\t$(ADARARE_DOCKER_BUILD_ARGS) \\\n'
     section += ('\t--cache-from ' + os.path.join(BASE_TAG, image['tag']) +
                 ' \\\n')

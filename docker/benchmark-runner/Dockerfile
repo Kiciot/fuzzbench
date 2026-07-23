@@ -28,6 +28,7 @@
 
 ARG fuzzer
 ARG benchmark
+ARG image_namespace=gcr.io/fuzzbench
 
 # -----------------------------
 # Proxy (build-time configurable)
@@ -41,11 +42,11 @@ ARG NO_PROXY=localhost,127.0.0.1,::1,172.17.0.0/16
 
 # We take the already built builder image for the given fuzzer/benchmark pair
 # and refer to it as "builder", so we can copy the build artifacts from it.
-FROM gcr.io/fuzzbench/builders/$fuzzer/$benchmark AS builder
+FROM ${image_namespace}/builders/$fuzzer/$benchmark AS builder
 
 # We base the runner image from the intermediate runner image, defined by the
 # runner.Dockerfile of each fuzzer.
-FROM gcr.io/fuzzbench/runners/$fuzzer/$benchmark-intermediate
+FROM ${image_namespace}/runners/$fuzzer/$benchmark-intermediate
 
 ENV HTTP_PROXY=${HTTP_PROXY} \
     HTTPS_PROXY=${HTTPS_PROXY} \
