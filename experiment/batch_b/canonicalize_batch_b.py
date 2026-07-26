@@ -319,7 +319,6 @@ def docker_build_command(spec: BuildSpec) -> list[str]:
     command = [
         'docker',
         'build',
-        '--network=host',
         '--no-cache',
         '--tag',
         spec.image,
@@ -981,14 +980,17 @@ def main() -> int:
     if git_output(repo, 'status', '--porcelain'):
         raise GateError('FuzzBench worktree is not clean before the build')
     fuzzbench_commit = git_output(repo, 'rev-parse', 'HEAD')
-    parent = git_output(repo, 'rev-parse', 'HEAD^')
-    if parent != args.expected_parent:
+    direct_parent = git_output(repo, 'rev-parse', 'HEAD^')
+    base = git_output(repo, 'merge-base', args.expected_parent,
+                      fuzzbench_commit)
+    if base != args.expected_parent:
         raise GateError(
-            f'expected parent {args.expected_parent}, found {parent}')
-    changed_paths = validate_changed_paths(repo, parent, fuzzbench_commit)
+            f'expected base {args.expected_parent}, found {base}')
+    changed_paths = validate_changed_paths(repo, base, fuzzbench_commit)
     preflight = {
         'fuzzbench_commit': fuzzbench_commit,
-        'fuzzbench_parent': parent,
+        'fuzzbench_parent': direct_parent,
+        'fuzzbench_base': base,
         'aflplusplus_commit': git_output(args.aflplusplus_dir.resolve(),
                                          'rev-parse', 'HEAD'),
         'changed_paths': changed_paths,
