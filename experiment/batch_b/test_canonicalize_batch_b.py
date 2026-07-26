@@ -62,6 +62,16 @@ def test_no_actual_dictionary_is_reported_as_missing():
     assert canonical.dictionary_signature({'dictionary_usage': []}) is None
 
 
+def test_gnutls_disconnect_is_a_bounded_transient_retry_condition(tmp_path):
+    log = tmp_path / 'build.log'
+    log.write_text(
+        "fatal: unable to access 'https://github.com/example/repo/': "
+        'GnuTLS recv error (-110): The TLS connection was non-properly '
+        'terminated.\n',
+        encoding='utf-8')
+    assert canonical.is_transient_failure(log)
+
+
 def test_plan_has_one_canonical_builder_per_benchmark_and_30_new_runners():
     planned = canonical.build_plan(
         ROOT, 'gcr.io/fuzzbench-batchb-focused', 'test-canonical')

@@ -48,6 +48,8 @@ MAX_TRANSIENT_ATTEMPTS = 3
 TRANSIENT_MARKERS = (
     'tls handshake timeout',
     'tls handshake',
+    'gnutls recv error',
+    'tls connection was non-properly terminated',
     'x509:',
     'certificate verify failed',
     'proxyconnect',
